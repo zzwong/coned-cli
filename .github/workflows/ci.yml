@@ -75,9 +75,36 @@ jobs:
         run: |
           unformatted="$(find . -name '*.go' -type f -exec gofmt -l {} +)"
           test -z "$unformatted"
-      - run: go test -race -shuffle=on ./...
+      - name: Test with coverage
+        if: runner.os == 'Linux'
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      - name: Enforce coverage floor
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          echo "total statement coverage: ${coverage}%"
+          awk -v coverage="$coverage" 'BEGIN { exit !(coverage + 0 >= 70) }'
+      - name: Test
+        if: runner.os != 'Linux'
+        run: go test -race -shuffle=on ./...
       - run: go vet ./...
       - run: git diff --check
+  lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
   security:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -99,7 +126,7 @@ jobs:
           GOARCH: amd64
         run: go build ./cmd/coned
   required:
-    needs: [changes, test, security]
+    needs: [changes, test, lint, security]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -110,10 +137,12 @@ jobs:
           CHANGE_RESULT: ${{ needs.changes.result }}
           CODE_CHANGED: ${{ needs.changes.outputs.code }}
           TEST_RESULT: ${{ needs.test.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
         run: |
           test "$CHANGE_RESULT" = "success"
           if [[ "$CODE_CHANGED" == "true" ]]; then
             test "$TEST_RESULT" = "success"
+            test "$LINT_RESULT" = "success"
             test "$SECURITY_RESULT" = "success"
           fi

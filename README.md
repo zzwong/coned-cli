@@ -1,6 +1,7 @@
 # coned-cli
 
 [![CI](https://github.com/zzwong/coned-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/zzwong/coned-cli/actions/workflows/ci.yml)
+[![golangci-lint](https://img.shields.io/github/actions/workflow/status/zzwong/coned-cli/ci.yml?branch=main&label=golangci-lint&logo=go)](https://github.com/zzwong/coned-cli/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A headless CLI for accessing Con Edison account, billing, and energy-usage data.
@@ -212,10 +213,7 @@ CLI flags override the configured profile and timeout. The production client acc
 ## Development
 
 ```bash
-make fmt-check
-make test
-make vet
-make diff-check
+make check
 make build
 ./bin/coned version
 ```

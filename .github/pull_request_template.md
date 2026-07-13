@@ -2,9 +2,8 @@
 
 ## Testing
 
-- [ ] `go test -race ./...`
-- [ ] `go vet ./...`
-- [ ] `git diff --check`
+- [ ] `make check`
+- [ ] `govulncheck ./...`
 - [ ] Provider-contract changes include updated provenance/version/`last_verified` metadata
 
 ## Security and privacy

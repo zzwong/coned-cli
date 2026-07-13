@@ -255,8 +255,8 @@ func runOpowerExport(cmd *cobra.Command, options *Options, deps Dependencies, fo
 	keep := false
 	defer func() {
 		if !keep {
-			file.Close()
-			os.Remove(temp)
+			_ = file.Close()
+			_ = os.Remove(temp)
 		}
 	}()
 	if _, err = file.Write(data); err != nil || file.Sync() != nil || file.Close() != nil {
@@ -419,8 +419,8 @@ func newOutputFileWithPrefix(output string, force bool, prefix string) (*os.File
 		return nil, "", err
 	}
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		os.Remove(file.Name())
+		_ = file.Close()
+		_ = os.Remove(file.Name())
 		return nil, "", err
 	}
 	return file, file.Name(), nil

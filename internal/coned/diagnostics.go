@@ -31,7 +31,7 @@ func (c *Client) SchemaDiagnostics(ctx context.Context, session auth.Session) ([
 	if err != nil {
 		return nil, transportError(ctx)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, protocolError(resp)
 	}

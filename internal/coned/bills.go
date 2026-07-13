@@ -108,9 +108,9 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 		return billDownloadError(id, transportError(ctx))
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	response.Body.Close()
-	if readErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
-		if readErr != nil {
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+		if readErr != nil || closeErr != nil {
 			return billDownloadError(id, ErrProtocolChanged)
 		}
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
@@ -126,7 +126,7 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 	if err != nil {
 		return billDownloadError(id, transportError(ctx))
 	}
-	defer pdf.Body.Close()
+	defer func() { _ = pdf.Body.Close() }()
 	if pdf.StatusCode < 200 || pdf.StatusCode >= 300 {
 		if pdf.StatusCode == http.StatusUnauthorized || pdf.StatusCode == http.StatusForbidden || isLoginRedirect(pdf) {
 			return billDownloadError(id, ErrSessionExpired)
@@ -151,7 +151,7 @@ func (c *Client) billRecords(ctx context.Context, session auth.Session) (billing
 	if err != nil {
 		return nil, nil, transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
 		return nil, nil, ErrProtocolChanged
@@ -178,7 +178,7 @@ func (c *Client) historyMetadata(ctx context.Context, session auth.Session) (bil
 	if err != nil {
 		return nil, transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
 		return nil, ErrProtocolChanged

@@ -70,11 +70,11 @@ func newDiagnosticsCommand(options *Options, deps Dependencies) *cobra.Command {
 			err = closeErr
 		}
 		if err != nil {
-			os.Remove(temp)
+			_ = os.Remove(temp)
 			return coned.ErrProtocolChanged
 		}
 		if err = publishOutput(temp, output, false); err != nil {
-			os.Remove(temp)
+			_ = os.Remove(temp)
 			return coned.ErrProtocolChanged
 		}
 		return nil

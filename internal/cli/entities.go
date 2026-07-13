@@ -208,8 +208,8 @@ func selectEntity(cmd *cobra.Command, options *Options, deps Dependencies, value
 	if cfg.Save(deps.ConfigPath) != nil {
 		return coned.ErrProtocolChanged
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "selected "+strings.SplitN(value, "-", 2)[0])
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), "selected "+strings.SplitN(value, "-", 2)[0])
+	return err
 }
 func resolveEntitySelection(ctx context.Context, options *Options, deps Dependencies, session auth.Session) (coned.EntitySelection, error) {
 	account, meter := options.Account, options.Meter

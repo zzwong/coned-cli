@@ -47,14 +47,14 @@ func (c *Client) Authenticate(ctx context.Context, credentials auth.Credentials)
 	resetURL, _ := url.Parse("https://coned.okta.com/api/v1/sessions/me")
 	if reset, resetErr := c.request(ctx, http.MethodDelete, resetURL, nil, false); resetErr == nil {
 		c.debugf("auth Okta reset response status=%d", reset.StatusCode)
-		reset.Body.Close()
+		_ = reset.Body.Close()
 	}
 	c.debugf("auth login request started")
 	response, err := c.request(ctx, http.MethodPost, c.endpoint(loginPath), bytes.NewReader(data), true)
 	if err != nil {
 		return auth.Session{}, transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth login response status=%d", response.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
@@ -163,7 +163,7 @@ func (c *Client) ResendMFA(ctx context.Context) error {
 	if err != nil {
 		return transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth MFA resend response status=%d", response.StatusCode)
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
@@ -198,7 +198,7 @@ func (c *Client) VerifyMFA(ctx context.Context, code string) (auth.Session, erro
 	if err != nil {
 		return auth.Session{}, transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth MFA verification response status=%d", response.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
@@ -369,7 +369,7 @@ func (c *Client) follow(ctx context.Context, next *url.URL) error {
 		if err != nil {
 			return transportError(ctx)
 		}
-		response.Body.Close()
+		_ = response.Body.Close()
 		c.debugf("auth redirect response status=%d", response.StatusCode)
 		for _, cookie := range response.Cookies() {
 			c.debugf("auth redirect set-cookie name=%s domain=%s path=%s value_len=%d max_age=%d expires_set=%t expires_future=%t", cookie.Name, strings.TrimPrefix(cookie.Domain, "."), cookie.Path, len(cookie.Value), cookie.MaxAge, !cookie.Expires.IsZero(), cookie.Expires.After(time.Now()))
@@ -404,7 +404,7 @@ func (c *Client) confirm(ctx context.Context) error {
 	if err != nil {
 		return transportError(ctx)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth confirmation response status=%d", response.StatusCode)
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		location, err := response.Location()
@@ -456,7 +456,7 @@ func (c *Client) Logout(ctx context.Context, session auth.Session) error {
 		}
 		return auth.ErrLogoutFailed
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if (response.StatusCode >= 200 && response.StatusCode < 300) || response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
 		return nil
 	}

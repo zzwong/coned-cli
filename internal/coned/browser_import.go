@@ -57,7 +57,7 @@ func ImportBrowserSession(ctx context.Context, endpoint string) (auth.Session, e
 	if err != nil {
 		return auth.Session{}, errors.New("connect to browser endpoint")
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetReadDeadline(deadline)
 		_ = conn.SetWriteDeadline(deadline)
@@ -193,7 +193,7 @@ func resolveBrowserWebSocket(ctx context.Context, endpoint string) (string, erro
 	if err != nil {
 		return "", errors.New("query browser endpoint")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("query browser endpoint: status %d", response.StatusCode)
 	}

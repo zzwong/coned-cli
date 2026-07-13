@@ -221,11 +221,11 @@ func TestConcreteDownloadFailuresCleanUpAtCLILayer(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/en/accounts-billing/billing-history":
-					io.WriteString(w, `<input name="AccountMAID" value="synthetic-maid">`)
+					_, _ = io.WriteString(w, `<input name="AccountMAID" value="synthetic-maid">`)
 				case "/sitecore/api/ssc/ConEdWeb-Foundation-MyAccount-Areas-BillingHistory-BillingHistoryAPI/User/0/GetResidentialBillHistory":
-					io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-synthetic"}]`)
+					_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-synthetic"}]`)
 				case "/sitecore/api/ssc/ConEdWeb-Foundation-MyAccount-Areas-BillingHistory-BillingHistoryAPI/User/0/BillInsertImage":
-					io.WriteString(w, tc.documentResponse)
+					_, _ = io.WriteString(w, tc.documentResponse)
 				default:
 					http.NotFound(w, r)
 				}

@@ -48,7 +48,7 @@ func TestAuthenticateSuccessAndExactPayload(t *testing.T) {
 				t.Errorf("incorrect payload: %s", body)
 			}
 			fixture := readFixture(t, "login_success.json")
-			w.Write([]byte(strings.ReplaceAll(fixture, "https://www.coned.com", server.URL)))
+			_, _ = w.Write([]byte(strings.ReplaceAll(fixture, "https://www.coned.com", server.URL)))
 		case "/authorize":
 			if r.URL.Query().Get("state") != "synthetic" || r.URL.Query().Get("nonce") != "synthetic" || r.URL.Query().Get("sessionToken") != "synthetic-session-token" {
 				t.Error("authorize state, nonce, or session token was not preserved")
@@ -94,7 +94,7 @@ func TestVerifyMFAExactPayloadAndSession(t *testing.T) {
 				t.Errorf("incorrect MFA payload: %s", body)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"code":true,"authRedirectUrl":"` + server.URL + `/complete"}`))
+			_, _ = w.Write([]byte(`{"code":true,"authRedirectUrl":"` + server.URL + `/complete"}`))
 		case "/complete":
 			http.SetCookie(w, &http.Cookie{Name: "CE_AUTH", Value: "synthetic", Path: "/", HttpOnly: true})
 			w.WriteHeader(http.StatusOK)
@@ -123,7 +123,7 @@ func TestVerifyMFARejectsInvalidCodeAndUnsafeRedirect(t *testing.T) {
 		{"unsafe", `{"code":true,"authRedirectUrl":"https://evil.example/"}`, ErrProtocolChanged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(tc.response)) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(tc.response)) }))
 			defer server.Close()
 			_, err := testClient(t, server).VerifyMFA(context.Background(), "123456")
 			if !errors.Is(err, tc.want) {
@@ -174,9 +174,9 @@ func TestAuthenticationResponseErrors(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.status)
 				if tc.name == "invalid" {
-					w.Write([]byte(readFixture(t, "login_failure.json")))
+					_, _ = w.Write([]byte(readFixture(t, "login_failure.json")))
 				} else {
-					w.Write([]byte(tc.body))
+					_, _ = w.Write([]byte(tc.body))
 				}
 			}))
 			defer server.Close()
@@ -208,7 +208,7 @@ func TestUnsafeRedirectAndRedirectToLogin(t *testing.T) {
 					if tc.authorize {
 						body = `{"url":"` + server.URL + `/authorize"}`
 					}
-					w.Write([]byte(body))
+					_, _ = w.Write([]byte(body))
 					return
 				}
 				if r.URL.Path == "/authorize" {
@@ -237,7 +237,7 @@ func TestTimeoutAndCookieFilteringAndRestore(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == loginPath {
 			time.Sleep(100 * time.Millisecond)
-			w.Write([]byte(`{}`))
+			_, _ = w.Write([]byte(`{}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -361,7 +361,7 @@ func TestLogoutClearsOnFailureAndHonorsCancellation(t *testing.T) {
 func TestProtocolErrorDiagnosticsAreSafe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-ms-middleware-request-id", "safe-request_123")
-		w.Write([]byte(`{`))
+		_, _ = w.Write([]byte(`{`))
 	}))
 	defer server.Close()
 	_, err := testClient(t, server).Authenticate(context.Background(), auth.Credentials{Email: "a@b", Password: "p"})
@@ -423,7 +423,7 @@ func TestConfirmationProtocolErrorDiagnostics(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case loginPath:
-			w.Write([]byte(strings.ReplaceAll(readFixture(t, "login_success.json"), "https://www.coned.com", server.URL)))
+			_, _ = w.Write([]byte(strings.ReplaceAll(readFixture(t, "login_success.json"), "https://www.coned.com", server.URL)))
 		case "/authorize":
 			w.WriteHeader(http.StatusOK)
 		case accountPath:
