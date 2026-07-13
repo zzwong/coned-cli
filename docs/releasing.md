@@ -7,7 +7,7 @@ Releases are built by the tag-triggered GitHub Actions workflow and GoReleaser. 
 ```bash
 git status --short
 go mod verify
-go test -race ./...
+go test -race -shuffle=on ./...
 go vet ./...
 govulncheck ./...
 git diff --check
@@ -21,7 +21,7 @@ Inspect snapshot archives for the binary, `LICENSE`, `NOTICE`, `README.md`, and 
 
 1. Ensure `main` is green and the working tree is clean.
 2. Choose a semantic version. Before 1.0, incompatible CLI/schema changes increment the minor version.
-3. Create an annotated tag, for example `git tag -a v0.1.0 -m 'v0.1.0'`.
+3. Create and verify a signed annotated tag: `git tag -s v0.1.0 -m 'v0.1.0' && git tag -v v0.1.0`.
 4. Push the tag: `git push origin v0.1.0`.
 5. Verify the Release workflow, generated checksums, and GitHub build-provenance attestations before announcing the release.
 6. Test `gh attestation verify <archive> --repo zzwong/coned-cli` against one downloaded archive.

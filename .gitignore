@@ -1,6 +1,8 @@
 /coned
 /bin/
 /dist/
+/docs/.drafts/
+/docs/plans/
 coverage.out
 coverage.html
 *.coverprofile
