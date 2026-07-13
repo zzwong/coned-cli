@@ -75,7 +75,19 @@ jobs:
         run: |
           unformatted="$(find . -name '*.go' -type f -exec gofmt -l {} +)"
           test -z "$unformatted"
-      - run: go test -race -shuffle=on ./...
+      - name: Test with coverage
+        if: runner.os == 'Linux'
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      - name: Enforce coverage floor
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          echo "total statement coverage: ${coverage}%"
+          awk -v coverage="$coverage" 'BEGIN { exit !(coverage + 0 >= 70) }'
+      - name: Test
+        if: runner.os != 'Linux'
+        run: go test -race -shuffle=on ./...
       - run: go vet ./...
       - run: git diff --check
   lint:
