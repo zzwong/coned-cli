@@ -230,7 +230,7 @@ Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). See [d
 
 ## Disclaimer
 
-This project uses unsupported Con Edison web interfaces, which may change without notice. It is intended only for account holders and authorized agents accessing data they are permitted to view. Users are responsible for complying with their utility agreements and applicable terms. The software does not bypass access controls.
+This project interoperates with non-public web interfaces used by Con Edison’s My Account site. These interfaces are not offered as a documented or supported developer API and may change without notice. It is intended only for account holders and authorized agents accessing data they are permitted to view. Users are responsible for complying with their utility agreements and applicable terms. The software does not bypass access controls.
 
 This project is not affiliated with or endorsed by Consolidated Edison, Inc., Opower, or Oracle. “Con Edison” and related marks belong to their respective owners.
 

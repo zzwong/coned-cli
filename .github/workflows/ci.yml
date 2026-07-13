@@ -11,7 +11,51 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        name: Classify changed paths
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="$PUSH_BASE"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r path; do
+            case "$path" in
+              *.md|LICENSE|NOTICE|.github/ISSUE_TEMPLATE/*)
+                ;;
+              *)
+                code=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$base" "$GITHUB_SHA")
+          echo "code=$code" >> "$GITHUB_OUTPUT"
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +79,8 @@ jobs:
       - run: go vet ./...
       - run: git diff --check
   security:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -52,3 +98,22 @@ jobs:
           GOOS: windows
           GOARCH: amd64
         run: go build ./cmd/coned
+  required:
+    needs: [changes, test, security]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required jobs
+        shell: bash
+        env:
+          CHANGE_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          TEST_RESULT: ${{ needs.test.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          test "$CHANGE_RESULT" = "success"
+          if [[ "$CODE_CHANGED" == "true" ]]; then
+            test "$TEST_RESULT" = "success"
+            test "$SECURITY_RESULT" = "success"
+          fi
