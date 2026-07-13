@@ -7,17 +7,20 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY ?= $(shell test -z "$$(git status --porcelain 2>/dev/null)" && echo false || echo true)
 LDFLAGS := -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Date=$(DATE) -X $(PKG).Dirty=$(DIRTY)
+GO ?= go
 
-.PHONY: build install test vet security fmt-check diff-check release-check check clean
+.PHONY: build install test vet lint security fmt-check diff-check release-check check clean
 build:
 	mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD)
+	GOTOOLCHAIN=auto $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD)
 install:
-	go install -ldflags "$(LDFLAGS)" $(CMD)
+	GOTOOLCHAIN=auto $(GO) install -ldflags "$(LDFLAGS)" $(CMD)
 test:
-	go test -race ./...
+	GOTOOLCHAIN=auto $(GO) test -race -shuffle=on ./...
 vet:
-	go vet ./...
+	GOTOOLCHAIN=auto $(GO) vet ./...
+lint:
+	GOTOOLCHAIN=auto golangci-lint run ./...
 fmt-check:
 	test -z "$$(gofmt -l $$(find . -name '*.go' -type f))"
 diff-check:
@@ -27,6 +30,6 @@ security:
 release-check:
 	goreleaser check
 	goreleaser release --snapshot --clean
-check: fmt-check test vet diff-check
+check: fmt-check test vet lint diff-check
 clean:
 	rm -rf $(BIN_DIR)
