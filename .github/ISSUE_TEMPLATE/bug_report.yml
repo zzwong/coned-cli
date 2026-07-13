@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible problem without sharing account data
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not include passwords, MFA codes, cookies, tokens, account numbers, addresses, bills, signed URLs, HAR files, or raw provider responses.** Use `coned diagnostics schema` when structural information is needed.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `coned version`
+      placeholder: coned v0.1.0 ...
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Linux, macOS, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and sanitized output
+      description: Remove all personal and authentication data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this report and removed credentials, tokens, identifiers, addresses, bills, signed URLs, and raw provider data.
+          required: true

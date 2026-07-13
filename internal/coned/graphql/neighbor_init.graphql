@@ -1,0 +1,148 @@
+query WNC_getData($billingAccountURN: ID!, $forceLegacyData: Boolean!) {
+  billingAccountsConnection(
+    byURNs: [$billingAccountURN]
+    forceLegacyData: $forceLegacyData
+  ) {
+    edges {
+      node {
+        premisesConnection {
+          edges {
+            segments {
+              id
+              name
+              attributes {
+                key
+                value
+                __typename
+              }
+              __typename
+            }
+            neighborDetails: neighbors {
+              details {
+                heatingType
+                dwellingType
+                percentWithSameHeatingType
+                percentWithSameDwellingType
+                averageLivingArea {
+                  value
+                  unit
+                  __typename
+                }
+                averageDistance {
+                  value
+                  unit
+                  __typename
+                }
+                maxDistance {
+                  value
+                  unit
+                  __typename
+                }
+                maxBedrooms
+                minBedrooms
+                averageBedrooms
+                averageNumberOfOccupants
+                numberOfNeighbors
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        serviceAgreements(onlyActive: true) {
+          serviceType
+          consumptionCategories(latestBillPeriod: true) {
+            name
+            ratio
+            usage {
+              value
+              unit
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        bills(last: 1) {
+          timeInterval
+          consumptionCategories {
+            name
+            ratio
+            usage {
+              value
+              unit
+              __typename
+            }
+            __typename
+          }
+          combinedNC: neighborComparison {
+            meterType
+            timeInterval
+            youUsage {
+              value
+              unit
+              __typename
+            }
+            averageOfAllNeighborsUsage {
+              value
+              unit
+              __typename
+            }
+            efficientNeighborsThresholdUsage {
+              value
+              unit
+              __typename
+            }
+            __typename
+          }
+          gasNC: neighborComparison(serviceType: GAS) {
+            meterType
+            timeInterval
+            youUsage {
+              value
+              unit
+              __typename
+            }
+            averageOfAllNeighborsUsage {
+              value
+              unit
+              __typename
+            }
+            efficientNeighborsThresholdUsage {
+              value
+              unit
+              __typename
+            }
+            __typename
+          }
+          elecNC: neighborComparison(serviceType: ELECTRICITY) {
+            meterType
+            timeInterval
+            youUsage {
+              value
+              unit
+              __typename
+            }
+            averageOfAllNeighborsUsage {
+              value
+              unit
+              __typename
+            }
+            efficientNeighborsThresholdUsage {
+              value
+              unit
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

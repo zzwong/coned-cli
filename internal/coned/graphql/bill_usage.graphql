@@ -1,0 +1,78 @@
+query WDB_GetCostUsageReadsForBills($selectedAccount: ID, $customerURN: ID, $last: Int, $timeInterval: TimeInterval, $forceLegacyData: Boolean, $aliased: Boolean) {
+  billingAccountByAuthContext(
+    selectedAccount: $selectedAccount
+    singlePremise: $customerURN
+    forceLegacyData: $forceLegacyData
+  ) {
+    urn
+    bills(
+      last: $last
+      during: $timeInterval
+      orderBy: ASCENDING
+      preserveDuplicateSegments: true
+    ) {
+      urn
+      timeInterval
+      segments {
+        urn
+        usageInterval
+        serviceAgreement(aliased: $aliased) {
+          urn
+          uuid
+          serviceType
+          __typename
+        }
+        estimated
+        serviceQuantities {
+          unit
+          serviceQuantityIdentifier
+          utilityServiceQuantityIdentifier
+          serviceQuantity {
+            value
+            __typename
+          }
+          __typename
+        }
+        usageCharges {
+          value
+          __typename
+        }
+        currentAmount {
+          value
+          __typename
+        }
+        deferredNEMCharges {
+          value
+          __typename
+        }
+        totalNEMCharges {
+          value
+          __typename
+        }
+        energyPurchased {
+          value
+          __typename
+        }
+        energySold {
+          value
+          __typename
+        }
+        rolloverBalanceEarned {
+          value
+          __typename
+        }
+        rolloverBalanceUsed {
+          value
+          __typename
+        }
+        totalEnergyCosts {
+          value
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

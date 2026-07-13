@@ -1,0 +1,21 @@
+query GetBillForecast {
+  billingAccountsConnection(first: 100) {
+    edges {
+      node {
+        billForecast {
+          timeInterval
+          currentDateTime
+          segments {
+            serviceAgreement { uuid }
+            estimatedUsage { value unit }
+            estimatedUsageCharges { value }
+            soFarUsage { value }
+            soFarUsageCharges { value }
+            priorYearUsage { value }
+            priorYearUsageCharges { value }
+          }
+        }
+      }
+    }
+  }
+}

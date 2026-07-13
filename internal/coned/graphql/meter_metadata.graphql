@@ -1,0 +1,50 @@
+query WRTAMI_GetMetadata($selectedAccount: ID, $forceLegacyData: Boolean) {
+  billingAccountByAuthContext(
+    selectedAccount: $selectedAccount
+    forceLegacyData: $forceLegacyData
+  ) {
+    urn
+    utilityId
+    serviceAgreementsConnection(onlyActive: true) {
+      edges {
+        node {
+          urn
+          uuid
+          utilityId
+          serviceType
+          servicePointsConnection {
+            edges {
+              node {
+                urn
+                uuid
+                utilityId
+                serviceType
+                premise {
+                  urn
+                  uuid
+                  utilityId
+                  timeZone
+                  __typename
+                }
+                registers {
+                  readResolution
+                  availableReadsTimeInterval
+                  serviceQuantityIdentifier
+                  unitOfMeasure
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

@@ -1,0 +1,39 @@
+query WRTAMI_GetRegisters($selectedAccount: ID, $forceLegacyData: Boolean, $timeInterval: TimeInterval, $saUuid: String, $spUuid: String) {
+  billingAccountByAuthContext(
+    selectedAccount: $selectedAccount
+    forceLegacyData: $forceLegacyData
+  ) {
+    urn
+    serviceAgreementsConnection(onlyActive: true, matching: $saUuid) {
+      edges {
+        node {
+          urn
+          uuid
+          servicePointsConnection(matching: $spUuid) {
+            edges {
+              node {
+                uuid
+                intervalReads(
+                  units: [KWH]
+                  serviceQuantityIdentifier: [NET_USAGE]
+                  timeInterval: $timeInterval
+                  onlyUnverifiedStreams: true
+                ) {
+                  registerId
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

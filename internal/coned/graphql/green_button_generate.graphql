@@ -1,0 +1,1 @@
+mutation WUE_GenerateUsageExportFile($usageExportFileConfigurationInput: UsageExportFileConfigurationInput) { generateUsageExportFile(usageExportFileConfigurationInput: $usageExportFileConfigurationInput) { uuid } }

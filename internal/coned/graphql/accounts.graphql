@@ -1,0 +1,38 @@
+query WBAS_BillingAccounts($urns: [ID!], $first: Int, $after: String, $onlyActive: Boolean) {
+  billingAccountsConnection(byURNs: $urns, first: $first, after: $after) {
+    totalCount
+    pageInfo {
+      startCursor
+      endCursor
+      hasNextPage
+      __typename
+    }
+    edges {
+      node {
+        mappedCustomers {
+          urn
+          uuid
+          id
+          utilityCustomerId
+          utilityInternalId
+          utilityInternalId2
+          accountNumber
+          __typename
+        }
+        name
+        urn
+        utilityCode
+        utilityId
+        uuid
+        customerClass
+        serviceAgreementsConnection(first: 1, onlyActive: $onlyActive) {
+          totalCount
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

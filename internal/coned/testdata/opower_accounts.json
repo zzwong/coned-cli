@@ -1,0 +1,1 @@
+{"data":{"billingAccountsConnection":{"edges":[{"node":{"urn":"urn:synthetic:account-12345678","name":"Synthetic home","utilityCode":"SYN","customerClass":"RESIDENTIAL","mappedCustomers":[{"urn":"urn:synthetic:customer-87654321"}],"serviceAgreementsConnection":{"totalCount":1}}}]}}}

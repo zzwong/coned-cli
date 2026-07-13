@@ -1,0 +1,23 @@
+{
+  "contract": {
+    "schema_version": 1,
+    "fixture_version": 1,
+    "operation": "opower-customers",
+    "provenance": "coned-live-verified",
+    "last_verified": "2026-07-12",
+    "source_revision": "coned-cli-live-probe-2026-07",
+    "claims": ["single customer", "electric utility account"],
+    "non_claims": ["multi-account verified", "gas verified", "inactive account verified"]
+  },
+  "response": {
+    "customers": [{
+      "uuid": "00000000-0000-4000-8000-abcd00000001",
+      "utilityAccounts": [{
+        "uuid": "00000000-0000-4000-8000-abcd00000002",
+        "preferredUtilityAccountId": "SYNTHETIC-ACCOUNT-01",
+        "meterType": "ELEC",
+        "readResolution": "HOUR"
+      }]
+    }]
+  }
+}

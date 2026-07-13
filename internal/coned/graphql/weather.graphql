@@ -1,0 +1,39 @@
+query WDB_GetWeather($selectedAccount: ID, $customerURN: ID, $unit: TemperatureUnit, $timeInterval: [TimeInterval], $weatherResolution: WeatherResolutionType, $forceLegacyData: Boolean, $premiseUuid: String) {
+  billingAccountByAuthContext(
+    selectedAccount: $selectedAccount
+    singlePremise: $customerURN
+    forceLegacyData: $forceLegacyData
+  ) {
+    premisesConnection(matching: $premiseUuid) {
+      edges {
+        node {
+          uuid
+          weather(
+            weatherResolution: $weatherResolution
+            intervals: $timeInterval
+            temperatureUnit: $unit
+          ) {
+            timeInterval
+            maxTemperature {
+              value
+              __typename
+            }
+            meanTemperature {
+              value
+              __typename
+            }
+            minTemperature {
+              value
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

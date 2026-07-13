@@ -1,0 +1,1 @@
+query WUE_GetExportJob($jobUuid: ID!) { exportJob(jobUuid: $jobUuid) { uuid result isRunning isFailed isFinished } }

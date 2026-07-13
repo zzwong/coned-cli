@@ -1,0 +1,1 @@
+query WUE_GetMetadata($selectedAccount: ID) { billingAccountByAuthContext(selectedAccount: $selectedAccount) { customerClass premisesConnection { edges { node { timeZone } } } } }

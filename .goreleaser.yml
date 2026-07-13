@@ -1,0 +1,38 @@
+version: 2
+project_name: coned-cli
+builds:
+  - id: coned
+    main: ./cmd/coned
+    binary: coned
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/zzwong/coned-cli/internal/build.Version={{.Version}}
+      - -X github.com/zzwong/coned-cli/internal/build.Commit={{.Commit}}
+      - -X github.com/zzwong/coned-cli/internal/build.Date={{.Date}}
+      - -X github.com/zzwong/coned-cli/internal/build.Dirty=false
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - third_party_licenses/*
+checksum:
+  name_template: checksums.txt
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+release:
+  prerelease: auto

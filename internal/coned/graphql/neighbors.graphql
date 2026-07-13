@@ -1,0 +1,83 @@
+query WDB_GetNeighborComparisons($selectedAccount: ID, $customerURN: ID, $forceLegacyData: Boolean, $premiseUuid: String) {
+  billingAccountByAuthContext(
+    selectedAccount: $selectedAccount
+    singlePremise: $customerURN
+    forceLegacyData: $forceLegacyData
+  ) {
+    premisesConnection(matching: $premiseUuid) {
+      edges {
+        node {
+          urn
+          uuid
+          __typename
+        }
+        elec: neighborComparisons(meterType: ELEC) {
+          meterType
+          timeInterval
+          youUsage {
+            unit
+            value
+            __typename
+          }
+          efficientNeighborsThresholdUsage {
+            value
+            unit
+            __typename
+          }
+          averageOfAllNeighborsUsage {
+            value
+            unit
+            __typename
+          }
+          numberOfNeighbors
+          __typename
+        }
+        gas: neighborComparisons(meterType: GAS) {
+          meterType
+          timeInterval
+          youUsage {
+            unit
+            value
+            __typename
+          }
+          efficientNeighborsThresholdUsage {
+            value
+            unit
+            __typename
+          }
+          averageOfAllNeighborsUsage {
+            value
+            unit
+            __typename
+          }
+          numberOfNeighbors
+          __typename
+        }
+        combined: neighborComparisons(meterType: COMBINED) {
+          meterType
+          timeInterval
+          youUsage {
+            unit
+            value
+            __typename
+          }
+          efficientNeighborsThresholdUsage {
+            value
+            unit
+            __typename
+          }
+          averageOfAllNeighborsUsage {
+            value
+            unit
+            __typename
+          }
+          numberOfNeighbors
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

@@ -1,0 +1,627 @@
+package cli
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zzwong/coned-cli/internal/auth"
+	"github.com/zzwong/coned-cli/internal/securestore"
+)
+
+type fakeAuthenticator struct {
+	calls       int
+	logoutCalls int
+	credentials auth.Credentials
+	session     auth.Session
+	err         error
+	logoutErr   error
+}
+
+func (a *fakeAuthenticator) Authenticate(_ context.Context, credentials auth.Credentials) (auth.Session, error) {
+	a.calls++
+	a.credentials = credentials
+	if a.err != nil {
+		return auth.Session{}, a.err
+	}
+	return a.session, nil
+}
+func (a *fakeAuthenticator) Logout(context.Context, auth.Session) error {
+	a.logoutCalls++
+	return a.logoutErr
+}
+
+type fakePrompter struct {
+	email                           string
+	mfaCode                         string
+	save                            bool
+	emailCalls, mfaCalls, saveCalls int
+	emailErr, mfaErr, saveErr       error
+}
+
+func (p *fakePrompter) Email() (string, error) {
+	p.emailCalls++
+	return p.email, p.emailErr
+}
+func (p *fakePrompter) MFACode() (string, error) {
+	p.mfaCalls++
+	return p.mfaCode, p.mfaErr
+}
+func (p *fakePrompter) ConfirmSave() (bool, error) {
+	p.saveCalls++
+	return p.save, p.saveErr
+}
+
+type fakeTerminal struct {
+	terminal  bool
+	password  string
+	err       error
+	readCalls int
+}
+
+func (t *fakeTerminal) IsTerminal(io.Reader) bool { return t.terminal }
+func (t *fakeTerminal) ReadPassword(io.Reader) ([]byte, error) {
+	t.readCalls++
+	return []byte(t.password), t.err
+}
+
+type failingStore struct {
+	securestore.Store
+	getErr, setErr, deleteErr error
+	getKey                    string
+}
+
+func (s failingStore) Get(profile, key string) ([]byte, error) {
+	if s.getErr != nil && (s.getKey == "" || s.getKey == key) {
+		return nil, s.getErr
+	}
+	return s.Store.Get(profile, key)
+}
+func (s failingStore) Set(profile, key string, value []byte) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	return s.Store.Set(profile, key, value)
+}
+func (s failingStore) Delete(profile, key string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	return s.Store.Delete(profile, key)
+}
+
+func validSession(now time.Time) auth.Session {
+	return auth.Session{Cookies: []auth.Cookie{{Name: "sid", Value: "secret-cookie"}}, AuthenticatedAt: now}
+}
+
+func run(t *testing.T, store securestore.Store, authenticator *fakeAuthenticator, prompt *fakePrompter, input, args string) (string, error) {
+	t.Helper()
+	return runWithDependencies(t, Dependencies{
+		Store: store, Authenticator: authenticator, Clock: func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }, Prompter: prompt, PasswordTerminal: &fakeTerminal{},
+	}, input, args)
+}
+
+func runWithDependencies(t *testing.T, deps Dependencies, input, args string) (string, error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	cmd := NewRootCommandWithDependencies(strings.NewReader(input), &out, &errOut, deps)
+	cmd.SetArgs(strings.Fields(args))
+	err := cmd.Execute()
+	return out.String() + errOut.String(), err
+}
+
+func TestLoginNoStoreAndPasswordStdin(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	p := &fakePrompter{email: "person@example.test", save: true}
+	output, err := run(t, store, a, p, "passphrase\n", "auth login --no-store --password-stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.credentials.Password != "passphrase" || a.credentials.Email != "person@example.test" {
+		t.Fatalf("unexpected credentials: %#v", a.credentials)
+	}
+	if p.saveCalls != 0 {
+		t.Fatal("no-store prompted to save")
+	}
+	if _, err := auth.LoadSession(store, "default"); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("session persisted: %v", err)
+	}
+	if strings.Contains(output, "passphrase") || strings.Contains(output, "person@example.test") || strings.Contains(output, "secret-cookie") {
+		t.Fatalf("secret leaked in output: %q", output)
+	}
+}
+
+func TestPasswordStdinPromptsForEmail(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	p := &fakePrompter{email: "person@example.test", save: false}
+	if _, err := run(t, store, a, p, "password\n", "auth login --no-store --password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if p.emailCalls != 1 || a.credentials.Email != "person@example.test" || a.credentials.Password != "password" {
+		t.Fatalf("stdin/password handling failed: prompts=%d credentials=%#v", p.emailCalls, a.credentials)
+	}
+}
+
+func TestNoStoreUsesStoredCredentialsWithoutPersisting(t *testing.T) {
+	base := securestore.NewMemoryStore()
+	stored := auth.Credentials{Email: "stored@example.test", Password: "stored-secret"}
+	if err := auth.SaveCredentials(base, "default", stored); err != nil {
+		t.Fatal(err)
+	}
+	store := failingStore{Store: base, setErr: errors.New("unexpected persistence")}
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	p := &fakePrompter{}
+	if _, err := run(t, store, a, p, "", "auth login --no-store"); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls != 1 || a.credentials != stored || p.emailCalls != 0 {
+		t.Fatalf("stored credentials not used: calls=%d credentials=%#v prompts=%d", a.calls, a.credentials, p.emailCalls)
+	}
+	if _, err := auth.LoadSession(base, "default"); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("session persisted: %v", err)
+	}
+}
+
+func TestInteractivePasswordRequiresTerminal(t *testing.T) {
+	deps := Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{email: "person@example.test"}, PasswordTerminal: &fakeTerminal{terminal: false}}
+	_, err := runWithDependencies(t, deps, "", "auth login --no-store")
+	if !errors.Is(err, auth.ErrPasswordInputNotTerminal) {
+		t.Fatalf("error = %v, want %v", err, auth.ErrPasswordInputNotTerminal)
+	}
+}
+
+func TestAuthInitResolution(t *testing.T) {
+	t.Run("stored session", func(t *testing.T) {
+		store := securestore.NewMemoryStore()
+		if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		a := &fakeAuthenticator{}
+		if _, err := run(t, store, a, &fakePrompter{}, "", "auth init"); err != nil {
+			t.Fatal(err)
+		}
+		if a.calls != 0 {
+			t.Fatalf("authentication called %d times", a.calls)
+		}
+	})
+
+	t.Run("force stored credentials", func(t *testing.T) {
+		store := securestore.NewMemoryStore()
+		stored := auth.Credentials{Email: "stored@example.test", Password: "stored-secret"}
+		if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.SaveCredentials(store, "default", stored); err != nil {
+			t.Fatal(err)
+		}
+		a := &fakeAuthenticator{session: validSession(time.Now())}
+		if _, err := run(t, store, a, &fakePrompter{}, "", "auth init --force"); err != nil {
+			t.Fatal(err)
+		}
+		if a.calls != 1 || a.credentials != stored {
+			t.Fatalf("stored credentials not used: calls=%d credentials=%#v", a.calls, a.credentials)
+		}
+	})
+
+	t.Run("prompt fallback", func(t *testing.T) {
+		store := securestore.NewMemoryStore()
+		a := &fakeAuthenticator{session: validSession(time.Now())}
+		p := &fakePrompter{email: "prompt@example.test"}
+		if _, err := run(t, store, a, p, "prompt-secret\n", "auth init --no-store --password-stdin"); err != nil {
+			t.Fatal(err)
+		}
+		if a.credentials != (auth.Credentials{Email: "prompt@example.test", Password: "prompt-secret"}) || p.emailCalls != 1 {
+			t.Fatalf("prompt fallback failed: credentials=%#v prompts=%d", a.credentials, p.emailCalls)
+		}
+	})
+}
+
+func TestPasswordStdinReadsBufferedEmailThenPassword(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	var out, errOut bytes.Buffer
+	cmd := NewRootCommandWithDependencies(strings.NewReader("person@example.test\npassword\n"), &out, &errOut, Dependencies{
+		Store: store, Authenticator: a, Clock: time.Now, PasswordTerminal: &fakeTerminal{},
+	})
+	cmd.SetArgs([]string{"auth", "login", "--no-store", "--password-stdin"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if a.credentials.Email != "person@example.test" || a.credentials.Password != "password" {
+		t.Fatalf("credentials = %#v", a.credentials)
+	}
+}
+
+func TestPasswordStdinRequiresOneTerminatedLine(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	p := &fakePrompter{email: "a@b"}
+	_, err := run(t, store, a, p, "password", "auth login --password-stdin --no-store")
+	if !errors.Is(err, auth.ErrInvalidPasswordStdin) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadPasswordStdinConsumesExactlyOneLine(t *testing.T) {
+	input := bufio.NewReader(strings.NewReader("password\nsecond line\n"))
+	password, err := readPasswordStdin(input)
+	if err != nil || password != "password" {
+		t.Fatalf("got password=%q err=%v", password, err)
+	}
+	remaining, err := input.ReadString('\n')
+	if err != nil || remaining != "second line\n" {
+		t.Fatalf("password reader consumed remaining input: %q, %v", remaining, err)
+	}
+}
+
+func TestInvalidStoredSessionFallsThroughToCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "corrupt", data: []byte(`{"Cookies":[`)},
+		{name: "invalid", data: []byte(`{"Cookies":[{"Name":"sid"}]}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := securestore.NewMemoryStore()
+			stored := auth.Credentials{Email: "stored@example.test", Password: "stored-secret"}
+			if err := auth.SaveCredentials(store, "default", stored); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Set("default", "session", tc.data); err != nil {
+				t.Fatal(err)
+			}
+			a := &fakeAuthenticator{session: validSession(time.Now())}
+			p := &fakePrompter{email: "prompt@example.test"}
+			output, err := run(t, store, a, p, "unused\n", "auth login")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.calls != 1 || a.credentials != stored || p.emailCalls != 0 {
+				t.Fatalf("fallthrough failed: calls=%d credentials=%#v email prompts=%d", a.calls, a.credentials, p.emailCalls)
+			}
+			if strings.Contains(output, "stored-secret") || strings.Contains(output, "prompt@example.test") {
+				t.Fatalf("secret leaked in output: %q", output)
+			}
+		})
+	}
+}
+
+func TestInvalidStoredCredentialsFallsThroughToPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "corrupt", data: []byte(`{"Email":"person@example.test"`)},
+		{name: "invalid", data: []byte(`{"Email":"person@example.test"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := securestore.NewMemoryStore()
+			if err := store.Set("default", "credentials", tc.data); err != nil {
+				t.Fatal(err)
+			}
+			a := &fakeAuthenticator{session: validSession(time.Now())}
+			p := &fakePrompter{email: "prompt@example.test"}
+			output, err := run(t, store, a, p, "prompt-secret\n", "auth login --password-stdin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.calls != 1 || a.credentials.Email != p.email || a.credentials.Password != "prompt-secret" || p.emailCalls != 1 {
+				t.Fatalf("prompt fallthrough failed: calls=%d credentials=%#v email prompts=%d", a.calls, a.credentials, p.emailCalls)
+			}
+			if strings.Contains(output, "prompt-secret") || strings.Contains(output, "prompt@example.test") {
+				t.Fatalf("secret leaked in output: %q", output)
+			}
+		})
+	}
+}
+
+func TestStoredSessionReuseAndForce(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	now := time.Now()
+	if err := auth.SaveSession(store, "default", validSession(now)); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeAuthenticator{session: validSession(now)}
+	p := &fakePrompter{email: "a@b", save: false}
+	if _, err := run(t, store, a, p, "new\n", "auth login"); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls != 0 {
+		t.Fatalf("authentication called %d times despite valid session", a.calls)
+	}
+	if _, err := run(t, store, a, p, "new\n", "auth login --force --password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls != 1 {
+		t.Fatalf("force did not authenticate: %d", a.calls)
+	}
+}
+
+func TestProfileIsolationAndInitPrompts(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	now := time.Now()
+	if err := auth.SaveCredentials(store, "one", auth.Credentials{Email: "one@test", Password: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.SaveSession(store, "one", validSession(now)); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeAuthenticator{session: validSession(now)}
+	p := &fakePrompter{email: "two@test", save: true}
+	if _, err := run(t, store, a, p, "two\n", "--profile two auth login --password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if a.credentials.Email != "two@test" {
+		t.Fatalf("wrong profile credentials: %#v", a.credentials)
+	}
+	if _, err := run(t, store, a, p, "", "--profile one auth init"); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls != 1 || p.emailCalls != 1 {
+		t.Fatalf("init did not reuse stored authentication: calls=%d email prompts=%d", a.calls, p.emailCalls)
+	}
+}
+
+func TestStatusStatesAndJSON(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{}
+	p := &fakePrompter{}
+	out, err := run(t, store, a, p, "", "auth status")
+	if err != nil || out != "not authenticated\n" {
+		t.Fatalf("got %q %v", out, err)
+	}
+	expired := validSession(time.Now())
+	expired.Cookies[0].Expires = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := auth.SaveSession(store, "default", expired); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(t, store, a, p, "", "auth status")
+	if err != nil || out != "expired\n" {
+		t.Fatalf("got %q %v", out, err)
+	}
+	valid := validSession(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err := auth.SaveSession(store, "default", valid); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(t, store, a, p, "", "--json auth status")
+	if err != nil || !strings.Contains(out, `"profile":"default"`) || !strings.Contains(out, `"status":"authenticated"`) || !strings.Contains(out, `"authentication_timestamp"`) {
+		t.Fatalf("got %q %v", out, err)
+	}
+}
+
+func TestStatusTreatsInvalidStoredSessionAsNotAuthenticated(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	secret := []byte(`{"Cookies":[{"Name":"sid","Value":"secret-cookie"}]`)
+	if err := store.Set("default", "session", secret); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range []string{"auth status", "--json auth status"} {
+		t.Run(args, func(t *testing.T) {
+			output, err := run(t, store, &fakeAuthenticator{}, &fakePrompter{}, "", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(output, "secret-cookie") || strings.Contains(output, "authentication_timestamp") {
+				t.Fatalf("invalid session leaked data: %q", output)
+			}
+			if strings.Contains(args, "--json") {
+				if output != `{"profile":"default","status":"not authenticated"}`+"\n" {
+					t.Fatalf("got %q", output)
+				}
+			} else if output != "not authenticated\n" {
+				t.Fatalf("got %q", output)
+			}
+		})
+	}
+}
+
+func TestLogoutDeletesLocallyOnRemoteFailureAndForgets(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.SaveCredentials(store, "default", auth.Credentials{Email: "a@b", Password: "pw"}); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeAuthenticator{logoutErr: errors.New("network failed")}
+	_, err := run(t, store, a, &fakePrompter{}, "", "auth logout --forget")
+	if err == nil {
+		t.Fatal("expected remote error")
+	}
+	if _, err := auth.LoadSession(store, "default"); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("session remains: %v", err)
+	}
+	if _, err := auth.LoadCredentials(store, "default"); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("credentials remain: %v", err)
+	}
+}
+
+func TestAuthenticationAndStatusRejectStorageLoadFailures(t *testing.T) {
+	secret := errors.New("storage failure")
+	for _, tc := range []struct {
+		name   string
+		args   string
+		getKey string
+	}{
+		{name: "session during login", args: "auth login --password-stdin", getKey: "session"},
+		{name: "credentials during login", args: "auth login --password-stdin", getKey: "credentials"},
+		{name: "session during status", args: "auth status", getKey: "session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt := &fakePrompter{email: "person@example.test"}
+			store := failingStore{Store: securestore.NewMemoryStore(), getErr: secret, getKey: tc.getKey}
+			output, err := run(t, store, &fakeAuthenticator{}, prompt, "password\n", tc.args)
+			if !errors.Is(err, auth.ErrStorageFailed) {
+				t.Fatalf("error = %v, want %v", err, auth.ErrStorageFailed)
+			}
+			if prompt.emailCalls != 0 {
+				t.Fatalf("email prompt called %d times", prompt.emailCalls)
+			}
+			if strings.Contains(output, secret.Error()) {
+				t.Fatalf("storage error leaked: %q", output)
+			}
+		})
+	}
+}
+
+func TestInteractivePasswordUsesInjectedTerminal(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+	prompt := &fakePrompter{email: "person@example.test", save: false}
+	terminal := &fakeTerminal{terminal: true, password: "terminal-password"}
+	_, err := runWithDependencies(t, Dependencies{Store: store, Authenticator: a, Clock: time.Now, Prompter: prompt, PasswordTerminal: terminal}, "", "auth login --no-store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.readCalls != 1 || a.credentials.Password != "terminal-password" {
+		t.Fatalf("terminal calls=%d credentials=%#v", terminal.readCalls, a.credentials)
+	}
+}
+
+func TestCredentialPersistenceConfirmationAndAuthenticationFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		save      bool
+		authErr   error
+		wantSaved bool
+	}{
+		{name: "yes saves after successful authentication", save: true, wantSaved: true},
+		{name: "no does not save", save: false},
+		{name: "authentication failure does not save", save: true, authErr: errors.New("remote rejected")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := securestore.NewMemoryStore()
+			a := &fakeAuthenticator{session: validSession(time.Now()), err: tc.authErr}
+			prompt := &fakePrompter{email: "person@example.test", save: tc.save}
+			_, err := run(t, store, a, prompt, "password\n", "auth login --password-stdin")
+			if tc.authErr != nil {
+				if !errors.Is(err, auth.ErrAuthenticationFailed) {
+					t.Fatalf("error = %v", err)
+				}
+				if prompt.saveCalls != 0 {
+					t.Fatal("confirmation happened before authentication succeeded")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			_, loadErr := auth.LoadCredentials(store, "default")
+			if got := loadErr == nil; got != tc.wantSaved {
+				t.Fatalf("credentials saved=%t, load error=%v", got, loadErr)
+			}
+		})
+	}
+}
+
+func TestStatusJSONTimestampAbsentAndExpiredPresent(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	a := &fakeAuthenticator{}
+	out, err := run(t, store, a, &fakePrompter{}, "", "--json auth status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var noSession map[string]any
+	if err := json.Unmarshal([]byte(out), &noSession); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := noSession["authentication_timestamp"]; ok {
+		t.Fatalf("absent session emitted timestamp: %s", out)
+	}
+
+	at := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	expired := validSession(at)
+	expired.Cookies[0].Expires = at.Add(-time.Hour)
+	if err := auth.SaveSession(store, "default", expired); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(t, store, a, &fakePrompter{}, "", "--json auth status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["status"] != "expired" || result["authentication_timestamp"] == nil {
+		t.Fatalf("expired session JSON = %s", out)
+	}
+}
+
+func TestLogoutCallsRemoteOnceAndOnlyForgetsCredentialsWithFlag(t *testing.T) {
+	for _, forget := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without forget", true: "with forget"}[forget], func(t *testing.T) {
+			store := securestore.NewMemoryStore()
+			if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if err := auth.SaveCredentials(store, "default", auth.Credentials{Email: "a@b", Password: "password"}); err != nil {
+				t.Fatal(err)
+			}
+			a := &fakeAuthenticator{}
+			args := "auth logout"
+			if forget {
+				args += " --forget"
+			}
+			if _, err := run(t, store, a, &fakePrompter{}, "", args); err != nil {
+				t.Fatal(err)
+			}
+			if a.logoutCalls != 1 {
+				t.Fatalf("remote logout calls = %d", a.logoutCalls)
+			}
+			if _, err := auth.LoadSession(store, "default"); !errors.Is(err, securestore.ErrNotFound) {
+				t.Fatalf("session remains: %v", err)
+			}
+			_, credentialsErr := auth.LoadCredentials(store, "default")
+			if got := credentialsErr == nil; got == forget {
+				t.Fatalf("credentials retained=%t, error=%v", got, credentialsErr)
+			}
+		})
+	}
+}
+
+func TestCommandErrorsAreSafeAndCategorized(t *testing.T) {
+	const secret = "known-secret-never-display"
+	cases := []struct {
+		name string
+		deps Dependencies
+		args string
+		want error
+	}{
+		{name: "prompt", args: "auth login --no-store --password-stdin", want: auth.ErrPromptFailed, deps: Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{emailErr: errors.New(secret)}, PasswordTerminal: &fakeTerminal{}}},
+		{name: "terminal password", args: "auth login --no-store", want: auth.ErrPasswordReadFailed, deps: Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{terminal: true, err: errors.New(secret)}}},
+		{name: "confirmation", args: "auth login --password-stdin", want: auth.ErrPromptFailed, deps: Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{session: validSession(time.Now())}, Clock: time.Now, Prompter: &fakePrompter{email: "a@b", saveErr: errors.New(secret)}, PasswordTerminal: &fakeTerminal{}}},
+		{name: "authenticator", args: "auth login --no-store --password-stdin", want: auth.ErrAuthenticationFailed, deps: Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{err: errors.New(secret)}, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}}},
+		{name: "session storage", args: "auth login --password-stdin", want: auth.ErrStorageFailed, deps: Dependencies{Store: failingStore{Store: securestore.NewMemoryStore(), setErr: errors.New(secret)}, Authenticator: &fakeAuthenticator{session: validSession(time.Now())}, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}}},
+		{name: "logout storage", args: "auth logout", want: auth.ErrStorageFailed, deps: Dependencies{Store: failingStore{Store: securestore.NewMemoryStore(), getErr: errors.New(secret), deleteErr: errors.New(secret)}, Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{}, PasswordTerminal: &fakeTerminal{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output, err := runWithDependencies(t, tc.deps, "password\n", tc.args)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			if strings.Contains(output, secret) || strings.Contains(err.Error(), secret) {
+				t.Fatalf("secret leaked: output=%q error=%v", output, err)
+			}
+		})
+	}
+}
+
+func TestNotImplementedAuthenticatorErrorIsPreserved(t *testing.T) {
+	output, err := runWithDependencies(t, Dependencies{Store: securestore.NewMemoryStore(), Authenticator: auth.NotImplementedAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}}, "not-a-real-password-value\n", "auth login --no-store --password-stdin")
+	if !errors.Is(err, auth.ErrNotImplemented) {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(output, "not-a-real-password-value") {
+		t.Fatalf("secret leaked in output: %q", output)
+	}
+}

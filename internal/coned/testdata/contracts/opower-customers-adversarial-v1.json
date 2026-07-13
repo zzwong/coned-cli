@@ -1,0 +1,18 @@
+{
+  "contract": {
+    "schema_version": 1,
+    "fixture_version": 1,
+    "operation": "opower-customers",
+    "provenance": "synthetic-adversarial",
+    "last_verified": "2026-07-12",
+    "claims": ["parser tolerance only"],
+    "non_claims": ["observed at Con Edison"]
+  },
+  "response": {
+    "additiveFutureField": true,
+    "customers": [
+      {"uuid":"00000000-0000-4000-8000-abcd00000011","utilityAccounts":[]},
+      {"uuid":"00000000-0000-4000-8000-abcd00000012","utilityAccounts":[{"uuid":"00000000-0000-4000-8000-abcd00000013","meterType":"UNKNOWN_FUTURE","readResolution":null,"optional":null}]}
+    ]
+  }
+}

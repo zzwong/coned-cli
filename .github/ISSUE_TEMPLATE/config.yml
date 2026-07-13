@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/zzwong/coned-cli/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Con Edison customer support
+    url: https://www.coned.com/en/contact-us
+    about: Account, billing, outage, and service questions must go to Con Edison.

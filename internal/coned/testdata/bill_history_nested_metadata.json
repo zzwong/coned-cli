@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "id": "unrelated-account-id",
+    "date": "2026-02-15"
+  },
+  "items": [
+    {
+      "metadata": {
+        "id": "unrelated-nested-id",
+        "statementDate": "2026-01-15"
+      }
+    }
+  ]
+}

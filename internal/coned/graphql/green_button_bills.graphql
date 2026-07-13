@@ -1,0 +1,1 @@
+query WUE_GetUsageExportBills($selectedAccount: ID, $timeInterval: TimeInterval, $forceLegacyData: Boolean, $last: Int) { billingAccountByAuthContext(selectedAccount: $selectedAccount, forceLegacyData: $forceLegacyData) { bills(during: $timeInterval, last: $last, orderBy: ASCENDING) { timeInterval } } }

@@ -1,0 +1,71 @@
+query WNC_GetMetadata($billingAccountURN: ID!, $forceLegacyData: Boolean!) {
+  billingAccountsConnection(
+    byURNs: [$billingAccountURN]
+    forceLegacyData: $forceLegacyData
+  ) {
+    edges {
+      node {
+        mappedCustomers {
+          urn
+          __typename
+        }
+        accountNumber
+        name
+        urn
+        utilityCode
+        utilityId
+        uuid
+        customerClass
+        serviceAgreementsConnection(first: 100, onlyActive: true) {
+          edges {
+            node {
+              name
+              nickname
+              urn
+              uuid
+              serviceType
+              utilityId
+              utilityCode
+              servicePointsConnection {
+                edges {
+                  node {
+                    name
+                    serviceType
+                    urn
+                    uuid
+                    utilityId
+                    nickname
+                    premise {
+                      timeZone
+                      name
+                      uuid
+                      urn
+                      utilityId
+                      address {
+                        addressLines
+                        locality
+                        adminArea
+                        postalCode
+                        __typename
+                      }
+                      __typename
+                    }
+                    __typename
+                  }
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

@@ -1,0 +1,11 @@
+/coned
+/bin/
+/dist/
+coverage.out
+coverage.html
+*.coverprofile
+*.har
+*.heapsnapshot
+.env
+.env.*
+!.env.example
