@@ -106,7 +106,7 @@ func greenExport(cmd *cobra.Command, o *Options, d Dependencies, format, from, t
 	if e != nil {
 		return safeGreenError(e)
 	}
-	defer os.Remove(spool)
+	defer func() { _ = os.Remove(spool) }()
 	if download {
 		if output == "" {
 			output = "green-button-usage.zip"
@@ -118,8 +118,8 @@ func greenExport(cmd *cobra.Command, o *Options, d Dependencies, format, from, t
 		keep := false
 		defer func() {
 			if !keep {
-				f.Close()
-				os.Remove(tmp)
+				_ = f.Close()
+				_ = os.Remove(tmp)
 			}
 		}()
 		in, e := os.Open(spool)
@@ -127,16 +127,16 @@ func greenExport(cmd *cobra.Command, o *Options, d Dependencies, format, from, t
 			return coned.ErrProtocolChanged
 		}
 		_, e = io.Copy(f, in)
-		in.Close()
-		if e != nil || f.Sync() != nil || f.Close() != nil {
+		closeErr := in.Close()
+		if e != nil || closeErr != nil || f.Sync() != nil || f.Close() != nil {
 			return coned.ErrProtocolChanged
 		}
 		if publishOutput(tmp, output, force) != nil {
 			return coned.ErrProtocolChanged
 		}
 		keep = true
-		fmt.Fprintln(cmd.OutOrStdout(), output)
-		return nil
+		_, e = fmt.Fprintln(cmd.OutOrStdout(), output)
+		return e
 	}
 	if format == "json" {
 		e = coned.GreenButtonCSVJSON(spool, cmd.OutOrStdout())

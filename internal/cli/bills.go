@@ -116,8 +116,8 @@ func downloadBill(cmd *cobra.Command, options *Options, deps Dependencies, id, o
 	keep := false
 	defer func() {
 		if !keep {
-			file.Close()
-			os.Remove(temp)
+			_ = file.Close()
+			_ = os.Remove(temp)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(cmd.Context(), options.Timeout)
@@ -136,8 +136,8 @@ func downloadBill(cmd *cobra.Command, options *Options, deps Dependencies, id, o
 		return coned.ErrProtocolChanged
 	}
 	keep = true
-	fmt.Fprintln(cmd.OutOrStdout(), output)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), output)
+	return err
 }
 
 func billDateFromID(id string) (string, bool) {
@@ -172,8 +172,8 @@ func newOutputFile(output string, force bool) (*os.File, string, error) {
 		return nil, "", coned.ErrProtocolChanged
 	}
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		os.Remove(file.Name())
+		_ = file.Close()
+		_ = os.Remove(file.Name())
 		return nil, "", coned.ErrProtocolChanged
 	}
 	return file, file.Name(), nil

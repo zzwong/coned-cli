@@ -305,7 +305,7 @@ func (c *Client) opowerGET(ctx context.Context, session auth.Session, token, end
 	if err != nil {
 		return transportError(ctx)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return ErrProtocolChanged

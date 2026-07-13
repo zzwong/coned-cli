@@ -34,13 +34,13 @@ func TestListBillsUsesAuthenticatedHistoryAndReturnsPublicNewestFirst(t *testing
 		}
 		switch r.URL.Path {
 		case billHistoryPath:
-			io.WriteString(w, readFixture(t, "bill_history.html"))
+			_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
 		case residentialBillHistoryPath:
 			body, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(body), "synthetic-maid") {
 				t.Error("metadata was not forwarded")
 			}
-			io.WriteString(w, `{"data":[{"BillDate":"01/15/2026","Cycle":"January","DocumentId":"opaque-one","DocumentType":"bill"},{"BillDate":"2026-02-15","Cycle":"February","DocumentId":"opaque-two","DocumentType":"bill"}]}`)
+			_, _ = io.WriteString(w, `{"data":[{"BillDate":"01/15/2026","Cycle":"January","DocumentId":"opaque-one","DocumentType":"bill"},{"BillDate":"2026-02-15","Cycle":"February","DocumentId":"opaque-two","DocumentType":"bill"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -76,15 +76,15 @@ func TestDownloadBillValidatesURLSizeAndPDF(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case billHistoryPath:
-					io.WriteString(w, readFixture(t, "bill_history.html"))
+					_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
 				case residentialBillHistoryPath:
-					io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque","DocumentType":"bill"}]`)
+					_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque","DocumentType":"bill"}]`)
 				case billInsertImagePath:
 					if tc.status != 0 {
 						w.WriteHeader(tc.status)
 						return
 					}
-					io.WriteString(w, `{"url":"`+tc.documentURL+`"}`)
+					_, _ = io.WriteString(w, `{"url":"`+tc.documentURL+`"}`)
 				default:
 					http.NotFound(w, r)
 				}
@@ -147,9 +147,9 @@ func TestBillSessionExpiryAndMissingBill(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case billHistoryPath:
-			io.WriteString(w, readFixture(t, "bill_history.html"))
+			_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
 		case residentialBillHistoryPath:
-			io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque"}]`)
+			_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque"}]`)
 		}
 	}))
 	defer server.Close()
@@ -244,9 +244,9 @@ func TestBillingOperationsSerializeSessionRestore(t *testing.T) {
 			} else {
 				secondHistory <- cookie.Value
 			}
-			io.WriteString(w, `<input name="AccountMAID" value="synthetic-maid">`)
+			_, _ = io.WriteString(w, `<input name="AccountMAID" value="synthetic-maid">`)
 		case residentialBillHistoryPath:
-			io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque"}]`)
+			_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque"}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -304,15 +304,15 @@ func TestSameDateIDsAreSafeAndAmbiguousDownloadsAreRejected(t *testing.T) {
 		switch r.URL.Path {
 		case billHistoryPath:
 			history++
-			io.WriteString(w, readFixture(t, "bill_history.html"))
+			_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
 		case residentialBillHistoryPath:
-			io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-one","DocumentType":"bill"},{"BillDate":"2026-02-15","DocumentId":"opaque-two","DocumentType":"bill"}]`)
+			_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-one","DocumentType":"bill"},{"BillDate":"2026-02-15","DocumentId":"opaque-two","DocumentType":"bill"}]`)
 		case billInsertImagePath:
 			insert++
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			io.WriteString(w, `{"url":"https://synthetic.blob.core.windows.net/bill.pdf?sig=synthetic"}`)
+			_, _ = io.WriteString(w, `{"url":"https://synthetic.blob.core.windows.net/bill.pdf?sig=synthetic"}`)
 		default:
 			http.NotFound(w, r)
 		}

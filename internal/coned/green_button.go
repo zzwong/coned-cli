@@ -227,7 +227,7 @@ func (c *Client) GreenButtonExport(ctx context.Context, s auth.Session, o GreenB
 	if err != nil {
 		return "", transportError(ctx)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", protocolError(resp)
 	}
@@ -236,22 +236,22 @@ func (c *Client) GreenButtonExport(ctx context.Context, s auth.Session, o GreenB
 		return "", ErrProtocolChanged
 	}
 	if err = file.Chmod(0600); err != nil {
-		file.Close()
-		os.Remove(file.Name())
+		_ = file.Close()
+		_ = os.Remove(file.Name())
 		return "", ErrProtocolChanged
 	}
 	n, err := io.Copy(file, io.LimitReader(resp.Body, maxExportZIP+1))
 	if err != nil || n > maxExportZIP {
-		file.Close()
-		os.Remove(file.Name())
+		_ = file.Close()
+		_ = os.Remove(file.Name())
 		return "", ErrProtocolChanged
 	}
 	if err = file.Close(); err != nil {
-		os.Remove(file.Name())
+		_ = os.Remove(file.Name())
 		return "", ErrProtocolChanged
 	}
 	if err = validateExportZIP(file.Name()); err != nil {
-		os.Remove(file.Name())
+		_ = os.Remove(file.Name())
 		return "", err
 	}
 	return file.Name(), nil
@@ -268,7 +268,7 @@ func validateExportZIP(name string) error {
 	if err != nil {
 		return ErrProtocolChanged
 	}
-	defer z.Close()
+	defer func() { _ = z.Close() }()
 	if len(z.File) == 0 || len(z.File) > maxExportEntries {
 		return ErrProtocolChanged
 	}
@@ -288,7 +288,7 @@ func ExtractGreenButton(name, format string, out io.Writer) error {
 	if err != nil {
 		return ErrProtocolChanged
 	}
-	defer z.Close()
+	defer func() { _ = z.Close() }()
 	ext := "." + strings.ToLower(format)
 	for _, f := range z.File {
 		if strings.EqualFold(filepath.Ext(f.Name), ext) {
@@ -297,8 +297,8 @@ func ExtractGreenButton(name, format string, out io.Writer) error {
 				return ErrProtocolChanged
 			}
 			_, e = io.Copy(out, io.LimitReader(r, maxExportEntry+1))
-			r.Close()
-			if e != nil {
+			closeErr := r.Close()
+			if e != nil || closeErr != nil {
 				return ErrProtocolChanged
 			}
 			return nil
@@ -311,14 +311,14 @@ func GreenButtonCSVJSON(name string, out io.Writer) error {
 	if err != nil {
 		return ErrProtocolChanged
 	}
-	defer z.Close()
+	defer func() { _ = z.Close() }()
 	for _, f := range z.File {
 		if strings.EqualFold(filepath.Ext(f.Name), ".csv") {
 			r, e := f.Open()
 			if e != nil {
 				return ErrProtocolChanged
 			}
-			defer r.Close()
+			defer func() { _ = r.Close() }()
 			cr := csv.NewReader(io.LimitReader(r, maxExportEntry+1))
 			cr.FieldsPerRecord = -1
 			var heads []string

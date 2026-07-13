@@ -268,11 +268,11 @@ func authStatus(cmd *cobra.Command, profile string, jsonOutput bool, deps Depend
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), string(data))
-		return nil
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
+		return err
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), statusName(state))
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), statusName(state))
+	return err
 }
 
 func authLogout(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, forget bool) error {
@@ -299,6 +299,6 @@ func authLogout(cmd *cobra.Command, profile string, timeout time.Duration, deps 
 	if len(errorsFound) > 0 {
 		return errors.Join(errorsFound...)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "not authenticated")
-	return nil
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), "not authenticated")
+	return err
 }
