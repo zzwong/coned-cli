@@ -4,9 +4,9 @@ builds:
   - id: coned
     main: ./cmd/coned
     binary: coned
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+    goos: [darwin]
+    goarch: [arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: [-trimpath]
     ldflags:

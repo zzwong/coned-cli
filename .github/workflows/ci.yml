@@ -88,6 +88,12 @@ jobs:
       - name: Test
         if: runner.os != 'Linux'
         run: go test -race -shuffle=on ./...
+      - name: Test native macOS Keychain integration
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+          CONED_KEYCHAIN_TEST: "1"
+        run: go test -race -shuffle=on ./internal/securestore -run '^TestDarwinKeyringIntegration' -count=1
       - run: go vet ./...
       - run: git diff --check
   lint:
