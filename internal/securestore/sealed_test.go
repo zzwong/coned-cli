@@ -127,8 +127,8 @@ func TestSealedDriverDeleteStopsMigrationOfAStuckLegacyItem(t *testing.T) {
 	driver, _, _ := newTestSealed(t)
 	stuck := &stuckLegacy{fakeLegacy: fakeLegacy{values: map[string][]byte{"a/Y3JlZGVudGlhbHM": []byte("old-password")}}}
 	driver.legacy = stuck
-	if err := driver.Delete("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, ErrAccessDenied) {
-		t.Fatalf("Delete() = %v, want the legacy failure reported", err)
+	if err := driver.Delete("coned-cli", "a/Y3JlZGVudGlhbHM"); err != nil {
+		t.Fatalf("Delete() = %v; a stuck legacy item must not fail logout", err)
 	}
 	if _, err := driver.Get("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() after logout = %v; the deleted value must not come back", err)

@@ -129,7 +129,10 @@ func (d sealedDriver) Delete(service, account string) error {
 		return err
 	}
 	existing, _ := os.ReadFile(path)
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	// An empty file reads as absent and blocks migration. It goes in before
+	// the legacy item is deleted, so no concurrent read can migrate that item
+	// back in between.
+	if err := writeFileAtomic(path, nil, true); err != nil {
 		return err
 	}
 	legacyErr := error(ErrNotFound)
@@ -137,12 +140,13 @@ func (d sealedDriver) Delete(service, account string) error {
 		legacyErr = d.legacy.Delete(service, account)
 	}
 	if legacyErr != nil && !errors.Is(legacyErr, ErrNotFound) {
-		// A legacy item left behind would be migrated back by a later read.
-		// An empty file stops that, since Get treats it as absent.
-		if err := writeFileAtomic(path, nil, true); err != nil {
-			return err
-		}
-		return legacyErr
+		// The Keychain kept the legacy item, often because there is no GUI
+		// session to approve the delete. The tombstone stays, so the item is
+		// never read again, and the value counts as deleted.
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	if len(existing) > 0 || legacyErr == nil {
 		return nil
