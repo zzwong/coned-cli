@@ -27,8 +27,11 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 		}
 		var force, noStore, passwordStdin bool
 		command := &cobra.Command{Use: use, Short: "Authenticate with Con Edison", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			return authenticate(cmd, options.Profile, options.Timeout, deps, input, rawInput, force, noStore, passwordStdin)
+			return authenticate(cmd, options.Profile, options.Timeout, deps, input, rawInput, force, noStore, passwordStdin, options.JSON)
 		}}
+		// Usage text on a failed login would land on stdout, which --json
+		// reserves for events.
+		command.SilenceUsage = true
 		command.Flags().BoolVar(&force, "force", false, "ignore any stored session")
 		command.Flags().BoolVar(&noStore, "no-store", false, "do not persist newly obtained authentication")
 		command.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read one newline-terminated password from standard input")
@@ -69,7 +72,7 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 	return authCmd
 }
 
-func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin bool) error {
+func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin, jsonOutput bool) error {
 	storedSession, sessionErr := auth.LoadSession(deps.Store, profile)
 	if sessionErr == nil {
 		// A session the provider has ended is replaced as --force would, but
@@ -81,8 +84,7 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 				return err
 			}
 			if live {
-				_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
-				return err
+				return reportAuthenticated(cmd, jsonOutput)
 			}
 			replace = true
 		}
@@ -122,12 +124,12 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 			if !deps.PasswordTerminal.IsTerminal(rawInput) {
 				return auth.ErrPasswordInputNotTerminal
 			}
-			if _, err = fmt.Fprint(cmd.OutOrStdout(), "Password: "); err != nil {
+			if _, err = fmt.Fprint(cmd.ErrOrStderr(), "Password: "); err != nil {
 				return auth.ErrPromptFailed
 			}
 			var password []byte
 			password, err = deps.PasswordTerminal.ReadPassword(rawInput)
-			if _, outputErr := fmt.Fprintln(cmd.OutOrStdout()); err == nil {
+			if _, outputErr := fmt.Fprintln(cmd.ErrOrStderr()); err == nil {
 				err = outputErr
 			}
 			credentials.Password = string(password)
@@ -150,8 +152,11 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 		if !ok {
 			return coned.ErrMFARequired
 		}
-		if _, outputErr := fmt.Fprintln(cmd.OutOrStdout(), "Verification required. Con Edison may enforce a 3-minute resend cooldown."); outputErr != nil {
+		if _, outputErr := fmt.Fprintln(cmd.ErrOrStderr(), "Verification required. Con Edison may enforce a 3-minute resend cooldown."); outputErr != nil {
 			return outputErr
+		}
+		if err := loginEvent(cmd, jsonOutput, "mfa_required"); err != nil {
+			return err
 		}
 		for {
 			code, promptErr := deps.Prompter.MFACode()
@@ -169,7 +174,7 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 				if resendErr != nil {
 					return safeAuthenticationError(resendErr)
 				}
-				if _, outputErr := fmt.Fprintln(cmd.OutOrStdout(), "Verification code requested."); outputErr != nil {
+				if _, outputErr := fmt.Fprintln(cmd.ErrOrStderr(), "Verification code requested."); outputErr != nil {
 					return outputErr
 				}
 				continue
@@ -222,7 +227,29 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 			}
 		}
 	}
-	_, err = fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
+	return reportAuthenticated(cmd, jsonOutput)
+}
+
+// loginEvent writes one JSON line per login milestone in --json mode, so a
+// script can drive a login: mfa_required is written before the code is read
+// from standard input. Prompts go to stderr and never mix into this stream.
+func loginEvent(cmd *cobra.Command, jsonOutput bool, event string) error {
+	if !jsonOutput {
+		return nil
+	}
+	data, err := json.Marshal(map[string]string{"event": event})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
+	return err
+}
+
+func reportAuthenticated(cmd *cobra.Command, jsonOutput bool) error {
+	if jsonOutput {
+		return loginEvent(cmd, jsonOutput, "authenticated")
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
 	return err
 }
 

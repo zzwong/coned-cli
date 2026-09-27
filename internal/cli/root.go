@@ -101,7 +101,7 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		deps.Clock = time.Now
 	}
 	if deps.Prompter == nil {
-		deps.Prompter = auth.NewTerminalPrompter(input, stdout)
+		deps.Prompter = auth.NewTerminalPrompter(input, stderr)
 	}
 	if deps.PasswordTerminal == nil {
 		deps.PasswordTerminal = auth.SystemPasswordTerminal{}

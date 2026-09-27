@@ -817,3 +817,68 @@ func TestLockedStoreAsksTheUserToUnlock(t *testing.T) {
 		t.Fatalf("err = %v, output = %q", err, out)
 	}
 }
+
+type mfaAuthenticator struct {
+	fakeAuthenticator
+	codes []string
+}
+
+func (a *mfaAuthenticator) Authenticate(context.Context, auth.Credentials) (auth.Session, error) {
+	a.calls++
+	return auth.Session{}, coned.ErrMFARequired
+}
+func (a *mfaAuthenticator) VerifyMFA(_ context.Context, code string) (auth.Session, error) {
+	a.codes = append(a.codes, code)
+	return a.session, nil
+}
+
+func TestJSONLoginEmitsEventsAndKeepsPromptsOffStdout(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	if err := auth.SaveCredentials(store, "default", auth.Credentials{Email: "a@b", Password: "synthetic-password"}); err != nil {
+		t.Fatal(err)
+	}
+	a := &mfaAuthenticator{fakeAuthenticator: fakeAuthenticator{session: validSession(time.Now())}}
+	var stdout, stderr bytes.Buffer
+	deps := Dependencies{Store: store, Authenticator: a, Clock: time.Now, PasswordTerminal: &fakeTerminal{}}
+	cmd := NewRootCommandWithDependencies(strings.NewReader("123456\n"), &stdout, &stderr, deps)
+	cmd.SetArgs([]string{"--json", "auth", "login"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "{\"event\":\"mfa_required\"}\n{\"event\":\"authenticated\"}\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr.String(), "Verification code") {
+		t.Fatalf("prompt missing from stderr: %q", stderr.String())
+	}
+	if len(a.codes) != 1 || a.codes[0] != "123456" {
+		t.Fatalf("codes = %v, want the one read from stdin", a.codes)
+	}
+}
+
+func TestJSONLoginWithLiveSessionReportsAuthenticated(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	deps := Dependencies{Store: store, Authenticator: &verifyingAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{}, PasswordTerminal: &fakeTerminal{}}
+	cmd := NewRootCommandWithDependencies(strings.NewReader(""), &stdout, io.Discard, deps)
+	cmd.SetArgs([]string{"--json", "auth", "login"})
+	if err := cmd.Execute(); err != nil || stdout.String() != "{\"event\":\"authenticated\"}\n" {
+		t.Fatalf("stdout = %q, err = %v", stdout.String(), err)
+	}
+}
+
+func TestJSONLoginFailureKeepsStdoutFreeOfUsage(t *testing.T) {
+	var stdout bytes.Buffer
+	deps := Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{}, PasswordTerminal: &fakeTerminal{}}
+	cmd := NewRootCommandWithDependencies(strings.NewReader(""), &stdout, io.Discard, deps)
+	cmd.SetArgs([]string{"--json", "auth", "login"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("login without credentials or a terminal succeeded")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing on failure", stdout.String())
+	}
+}
