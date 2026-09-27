@@ -182,7 +182,14 @@ func (c *Client) RestoreSession(session auth.Session) error {
 func (c *Client) VerifySession(ctx context.Context, session auth.Session) error {
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
-	if session.State(time.Now()) != auth.SessionValid || c.restoreSession(session) != nil {
+	if session.State(time.Now()) != auth.SessionValid {
+		return ErrSessionExpired
+	}
+	// Check with the stored cookies in a jar of their own, so a session the
+	// provider rejects cannot leak into a login that follows.
+	jar := c.jar
+	defer func() { c.jar, c.httpClient.Jar = jar, jar }()
+	if c.restoreSession(session) != nil {
 		return ErrSessionExpired
 	}
 	_, err := c.mintOpowerToken(ctx)

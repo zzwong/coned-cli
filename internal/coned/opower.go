@@ -75,14 +75,17 @@ func (c *Client) mintOpowerToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", ErrProtocolChanged
 	}
-	if response.StatusCode >= 500 {
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
+		return "", ErrSessionExpired
+	}
+	if response.StatusCode != http.StatusOK {
 		return "", protocolError(response)
 	}
 	var token string
-	if response.StatusCode == http.StatusOK && json.Unmarshal(body, &token) == nil && token != "" {
-		return token, nil
+	if json.Unmarshal(body, &token) != nil || token == "" {
+		return "", ErrSessionExpired
 	}
-	return "", ErrSessionExpired
+	return token, nil
 }
 
 // sessionRejected reports whether Con Edison no longer accepts the session in

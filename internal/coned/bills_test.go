@@ -410,3 +410,34 @@ func TestVerifySessionUsesTheTokenEndpoint(t *testing.T) {
 		t.Fatalf("empty session: err = %v", err)
 	}
 }
+
+func TestTokenEndpointOnlyTreatsRejectionAsAnEndedSession(t *testing.T) {
+	for status, want := range map[int]error{
+		http.StatusForbidden:       ErrSessionExpired,
+		http.StatusUnauthorized:    ErrSessionExpired,
+		http.StatusTooManyRequests: ErrProtocolChanged,
+		http.StatusNotFound:        ErrProtocolChanged,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		err := testClient(t, server).VerifySession(context.Background(), billSession(t, server.URL))
+		server.Close()
+		if !errors.Is(err, want) {
+			t.Fatalf("status %d: err = %v, want %v", status, err, want)
+		}
+	}
+}
+
+func TestVerifySessionLeavesTheClientJarUntouched(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+	before := client.jar
+	_ = client.VerifySession(context.Background(), billSession(t, server.URL))
+	if client.jar != before || client.httpClient.Jar != before {
+		t.Fatal("verification left the checked session's cookies in the client")
+	}
+}

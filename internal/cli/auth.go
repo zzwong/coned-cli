@@ -71,6 +71,9 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin bool) error {
 	storedSession, sessionErr := auth.LoadSession(deps.Store, profile)
 	if sessionErr == nil {
+		// A session the provider has ended is replaced as --force would, but
+		// only the session: force keeps meaning what the user asked for.
+		replace := force
 		if !force && storedSession.State(deps.Clock()) == auth.SessionValid {
 			live, err := sessionLive(cmd, timeout, deps, storedSession)
 			if err != nil {
@@ -80,11 +83,11 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
 				return err
 			}
-			force = true
+			replace = true
 		}
 		if restorer, ok := deps.Authenticator.(auth.SessionRestorer); ok {
 			restore := storedSession
-			if force {
+			if replace {
 				restore.Cookies = nil
 				for _, cookie := range storedSession.Cookies {
 					if cookie.Name == "CE_DEVICE_ID" {
