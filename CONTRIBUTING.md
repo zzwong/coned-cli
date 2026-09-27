@@ -13,7 +13,7 @@ For security vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of openi
 
 ## Development
 
-Go 1.25.12 or newer is required. Install the pinned lint runner once:
+Go 1.25.13 or newer is required. Install the pinned lint runner once:
 
 ```bash
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
