@@ -264,3 +264,42 @@ func TestDarwinKeyringDriverDeleteSanitizesOSStatusFailure(t *testing.T) {
 		t.Fatalf("Delete() error = %v, want sanitized failure", err)
 	}
 }
+
+func TestDarwinKeyringDriverReportsAccessDenial(t *testing.T) {
+	for _, status := range []int32{darwinSecInteractionNotAllowed, darwinSecAuthFailed, darwinSecUserCanceled} {
+		driver := darwinKeyringDriver{ops: &fakeDarwinSecItemOps{copyStatus: status}}
+		if _, err := driver.Get("coned-cli", "account"); !errors.Is(err, ErrAccessDenied) {
+			t.Fatalf("status %d: Get() error = %v, want ErrAccessDenied", status, err)
+		}
+	}
+	driver := darwinKeyringDriver{ops: &fakeDarwinSecItemOps{copyStatus: -25291}}
+	if _, err := driver.Get("coned-cli", "account"); err == nil || errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("unrelated status error = %v, want a generic failure", err)
+	}
+}
+
+func TestDarwinKeyringDriverReplacesItemItMayNotRead(t *testing.T) {
+	fake := &fakeDarwinSecItemOps{copyStatus: darwinSecInteractionNotAllowed, updateStatus: []int32{darwinSecItemNotFound}}
+	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deleteAccount != "account" || len(fake.addValues) != 1 {
+		t.Fatalf("delete=%q adds=%d, want the unreadable item deleted and added again", fake.deleteAccount, len(fake.addValues))
+	}
+
+	fake = &fakeDarwinSecItemOps{copyStatus: darwinSecItemSuccess}
+	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deleteAccount != "" || len(fake.updateValues) != 1 {
+		t.Fatal("a readable item was replaced instead of updated in place")
+	}
+
+	fake = &fakeDarwinSecItemOps{copyStatus: darwinSecInteractionNotAllowed, deleteStatus: darwinSecInteractionNotAllowed}
+	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("undeletable item: Set() error = %v, want ErrAccessDenied", err)
+	}
+	if len(fake.updateValues) != 0 || len(fake.addValues) != 0 {
+		t.Fatal("wrote a value after the unreadable item could not be removed")
+	}
+}

@@ -68,16 +68,9 @@ func entityContext(cmd *cobra.Command, options *Options, deps Dependencies) ([]p
 	if options.Demo {
 		manager = identity.Deterministic("default")
 	} else {
-		create := true
-		if deps.ConfigPath != "" {
-			if cfg, loadErr := config.Load(deps.ConfigPath); loadErr == nil {
-				selection := cfg.Selections[options.Profile]
-				create = len(selection.Aliases) == 0 && selection.DefaultAccount == "" && selection.DefaultMeter == ""
-			}
-		}
-		manager, err = identity.Load(deps.Store, options.Profile, create)
+		manager, err = identity.Load(deps.Store, options.Profile, !handlesInUse(deps, options.Profile))
 		if err != nil {
-			return nil, nil, auth.ErrStorageFailed
+			return nil, nil, auth.StorageError(err)
 		}
 	}
 	return entities, manager, nil
@@ -245,7 +238,7 @@ func resolveEntitySelection(ctx context.Context, options *Options, deps Dependen
 	}
 	manager, err := identity.Load(deps.Store, options.Profile, false)
 	if err != nil {
-		return coned.EntitySelection{}, auth.ErrStorageFailed
+		return coned.EntitySelection{}, auth.StorageError(err)
 	}
 	var result coned.EntitySelection
 	meterParent := ""
@@ -275,4 +268,19 @@ func validEntityHandle(v string) bool {
 		}
 	}
 	return false
+}
+
+// handlesInUse reports whether saved aliases or defaults refer to handles
+// derived from the profile's current key, which a new key would orphan. A
+// configuration that cannot be read counts as in use.
+func handlesInUse(deps Dependencies, profile string) bool {
+	if deps.ConfigPath == "" {
+		return false
+	}
+	cfg, err := config.Load(deps.ConfigPath)
+	if err != nil {
+		return true
+	}
+	selection := cfg.Selections[profile]
+	return len(selection.Aliases) != 0 || selection.DefaultAccount != "" || selection.DefaultMeter != ""
 }

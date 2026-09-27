@@ -30,11 +30,7 @@ func Deterministic(seed string) *Manager {
 func Load(store securestore.Store, profile string, create bool) (*Manager, error) {
 	key, err := store.Get(profile, handleKey)
 	if errors.Is(err, securestore.ErrNotFound) && create {
-		key = make([]byte, 32)
-		if _, err = rand.Read(key); err != nil {
-			return nil, fmt.Errorf("create handle key: %w", err)
-		}
-		if err = store.Set(profile, handleKey, key); err != nil {
+		if key, err = newKey(store, profile); err != nil {
 			return nil, err
 		}
 	} else if errors.Is(err, securestore.ErrNotFound) {
@@ -47,6 +43,25 @@ func Load(store securestore.Store, profile string, create bool) (*Manager, error
 	}
 	return &Manager{key: append([]byte(nil), key...)}, nil
 }
+
+// Replace stores a new handle key. Every handle derived from the old key stops
+// resolving, so callers must first rule out saved aliases and defaults.
+func Replace(store securestore.Store, profile string) error {
+	_, err := newKey(store, profile)
+	return err
+}
+
+func newKey(store securestore.Store, profile string) ([]byte, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("create handle key: %w", err)
+	}
+	if err := store.Set(profile, handleKey, key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
 func (m *Manager) Handle(entity Entity) (string, error) {
 	prefix := map[string]string{"account": "account", "premise": "premise", "meter": "meter", "register": "register"}[entity.Type]
 	if prefix == "" || entity.Namespace == "" || entity.ProviderID == "" {

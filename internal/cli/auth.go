@@ -14,6 +14,7 @@ import (
 
 	"github.com/zzwong/coned-cli/internal/auth"
 	"github.com/zzwong/coned-cli/internal/coned"
+	"github.com/zzwong/coned-cli/internal/identity"
 	"github.com/zzwong/coned-cli/internal/securestore"
 )
 
@@ -52,7 +53,7 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 			}
 		}
 		if err := auth.SaveSession(deps.Store, options.Profile, session); err != nil {
-			return auth.ErrStorageFailed
+			return auth.StorageError(err)
 		}
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "authenticated session imported")
 		return err
@@ -97,13 +98,13 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 			}
 			_ = restorer.RestoreSession(restore)
 		}
-	} else if !errors.Is(sessionErr, securestore.ErrNotFound) && !errors.Is(sessionErr, auth.ErrInvalidSession) {
-		return auth.ErrStorageFailed
+	} else if !absentForLogin(sessionErr, force) && !errors.Is(sessionErr, auth.ErrInvalidSession) {
+		return auth.StorageError(sessionErr)
 	}
 	prompted := false
 	credentials, err := auth.LoadCredentials(deps.Store, profile)
-	if err != nil && !errors.Is(err, securestore.ErrNotFound) && !errors.Is(err, auth.ErrInvalidCredentials) {
-		return auth.ErrStorageFailed
+	if err != nil && !absentForLogin(err, force) && !errors.Is(err, auth.ErrInvalidCredentials) {
+		return auth.StorageError(err)
 	}
 	if auth.ValidateCredentials(credentials) != nil {
 		prompted = true
@@ -202,7 +203,12 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 	}
 	if !noStore {
 		if err := auth.SaveSession(deps.Store, profile, session); err != nil {
-			return auth.ErrStorageFailed
+			return auth.StorageError(err)
+		}
+		if force {
+			if err := reclaimHandleKey(deps, profile); err != nil {
+				return err
+			}
 		}
 		if prompted {
 			save, err := deps.Prompter.ConfirmSave()
@@ -211,13 +217,28 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 			}
 			if save {
 				if err := auth.SaveCredentials(deps.Store, profile, credentials); err != nil {
-					return auth.ErrStorageFailed
+					return auth.StorageError(err)
 				}
 			}
 		}
 	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
 	return err
+}
+
+// reclaimHandleKey replaces an entity-handle key this build may not read, so a
+// forced login restores every command, not only authentication. The key only
+// derives local handles, so it is kept whenever saved aliases or defaults
+// refer to them.
+func reclaimHandleKey(deps Dependencies, profile string) error {
+	_, err := identity.Load(deps.Store, profile, false)
+	if !errors.Is(err, securestore.ErrAccessDenied) || handlesInUse(deps, profile) {
+		return nil
+	}
+	if err := identity.Replace(deps.Store, profile); err != nil {
+		return auth.StorageError(err)
+	}
+	return nil
 }
 
 // sessionLive confirms a locally unexpired session with the provider, so a
@@ -238,6 +259,13 @@ func sessionLive(cmd *cobra.Command, timeout time.Duration, deps Dependencies, s
 		return false, safeAuthenticationError(err)
 	}
 	return true, nil
+}
+
+// absentForLogin reports whether login may proceed as if a stored value did not
+// exist. A forced login also passes over values this build may not read, since
+// it replaces them, which is the recovery path for entries another build saved.
+func absentForLogin(err error, force bool) bool {
+	return errors.Is(err, securestore.ErrNotFound) || force && errors.Is(err, securestore.ErrAccessDenied)
 }
 
 func safeAuthenticationError(err error) error {
@@ -283,7 +311,7 @@ func authStatus(cmd *cobra.Command, profile string, jsonOutput bool, deps Depend
 	if err == nil {
 		state = session.State(deps.Clock())
 	} else if !errors.Is(err, securestore.ErrNotFound) && !errors.Is(err, auth.ErrInvalidSession) {
-		return auth.ErrStorageFailed
+		return auth.StorageError(err)
 	}
 	if jsonOutput {
 		result := struct {
@@ -316,14 +344,14 @@ func authLogout(cmd *cobra.Command, profile string, timeout time.Duration, deps 
 			errorsFound = append(errorsFound, auth.ErrLogoutFailed)
 		}
 	} else if !errors.Is(loadErr, securestore.ErrNotFound) {
-		errorsFound = append(errorsFound, auth.ErrStorageFailed)
+		errorsFound = append(errorsFound, auth.StorageError(loadErr))
 	}
 	if err := auth.DeleteSession(deps.Store, profile); err != nil && !errors.Is(err, securestore.ErrNotFound) {
-		errorsFound = append(errorsFound, auth.ErrStorageFailed)
+		errorsFound = append(errorsFound, auth.StorageError(err))
 	}
 	if forget {
 		if err := auth.DeleteCredentials(deps.Store, profile); err != nil && !errors.Is(err, securestore.ErrNotFound) {
-			errorsFound = append(errorsFound, auth.ErrStorageFailed)
+			errorsFound = append(errorsFound, auth.StorageError(err))
 		}
 	}
 	if len(errorsFound) > 0 {

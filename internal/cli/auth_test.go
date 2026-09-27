@@ -6,7 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -681,6 +684,24 @@ func TestLoginConfirmsStoredSessionWithProvider(t *testing.T) {
 	}
 }
 
+func TestProviderEndedSessionDoesNotImplyForce(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	a := &verifyingAuthenticator{fakeAuthenticator: fakeAuthenticator{session: validSession(time.Now())}, verifyErr: coned.ErrSessionExpired}
+	deps := Dependencies{
+		Store: failingStore{Store: store, getErr: fmt.Errorf("get secure value: %w", securestore.ErrAccessDenied), getKey: "credentials"}, Authenticator: a,
+		Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{},
+	}
+	if _, err := runWithDependencies(t, deps, "new\n", "auth login --password-stdin"); !errors.Is(err, auth.ErrStorageFailed) {
+		t.Fatalf("err = %v: unreadable credentials were passed over without --force", err)
+	}
+	if a.calls != 0 {
+		t.Fatal("authenticated after a storage failure the user did not ask to override")
+	}
+}
+
 func TestForcedLoginSkipsProviderVerification(t *testing.T) {
 	store := securestore.NewMemoryStore()
 	if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
@@ -693,5 +714,97 @@ func TestForcedLoginSkipsProviderVerification(t *testing.T) {
 	}
 	if a.verifyCalls != 0 || a.calls != 1 {
 		t.Fatalf("verify calls = %d, authenticate calls = %d", a.verifyCalls, a.calls)
+	}
+}
+
+func TestUnreadableStoredValuesExplainTheRecovery(t *testing.T) {
+	denied := fmt.Errorf("get secure value: %w", securestore.ErrAccessDenied)
+	memory := securestore.NewMemoryStore()
+	if err := auth.SaveSession(memory, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	store := failingStore{Store: memory, getErr: denied}
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+
+	for _, args := range []string{"auth status", "auth login --password-stdin"} {
+		out, err := run(t, store, a, &fakePrompter{email: "a@b"}, "new\n", args)
+		if !errors.Is(err, auth.ErrStorageAccessDenied) || !errors.Is(err, auth.ErrStorageFailed) {
+			t.Fatalf("%s: err = %v", args, err)
+		}
+		if !strings.Contains(out, "auth login --force") {
+			t.Fatalf("%s: output does not name the recovery: %q", args, out)
+		}
+	}
+	if a.calls != 0 {
+		t.Fatalf("authenticated %d times without --force", a.calls)
+	}
+
+	p := &fakePrompter{email: "a@b", save: true}
+	if _, err := run(t, store, a, p, "new\n", "auth login --force --password-stdin"); err != nil {
+		t.Fatalf("forced login over unreadable values: %v", err)
+	}
+	if a.calls != 1 || p.emailCalls != 1 {
+		t.Fatalf("authenticate calls = %d, email prompts = %d", a.calls, p.emailCalls)
+	}
+	if _, err := auth.LoadCredentials(memory, "default"); err != nil {
+		t.Fatalf("forced login did not store fresh credentials: %v", err)
+	}
+}
+
+func TestForcedLoginReclaimsAnUnreadableHandleKeyOnlyWhenUnused(t *testing.T) {
+	denied := fmt.Errorf("get secure value: %w", securestore.ErrAccessDenied)
+	for _, tc := range []struct {
+		name        string
+		config      string
+		wantReplace bool
+	}{
+		{name: "no saved selections", config: `{}`, wantReplace: true},
+		{name: "aliases refer to current handles", config: `{"selections":{"default":{"aliases":{"home":"account-aaaaaaaaaaaa"}}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memory := securestore.NewMemoryStore()
+			if err := memory.Set("default", "entity-handle-key-v1", bytes.Repeat([]byte{7}, 32)); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			a := &fakeAuthenticator{session: validSession(time.Now())}
+			deps := Dependencies{
+				Store: failingStore{Store: memory, getErr: denied, getKey: "entity-handle-key-v1"}, Authenticator: a, Clock: time.Now,
+				Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}, ConfigPath: configPath,
+			}
+			if _, err := runWithDependencies(t, deps, "new\n", "auth login --force --password-stdin"); err != nil {
+				t.Fatal(err)
+			}
+			key, err := memory.Get("default", "entity-handle-key-v1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replaced := !bytes.Equal(key, bytes.Repeat([]byte{7}, 32)); replaced != tc.wantReplace {
+				t.Fatalf("key replaced = %v, want %v", replaced, tc.wantReplace)
+			}
+		})
+	}
+}
+
+func TestHandlesInUseFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, config string
+		want         bool
+	}{
+		{name: "no saved selections", config: `{}`, want: false},
+		{name: "saved alias", config: `{"selections":{"default":{"aliases":{"home":"account-aaaaaaaaaaaa"}}}}`, want: true},
+		{name: "unreadable configuration", config: `{not json`, want: true},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := handlesInUse(Dependencies{ConfigPath: path}, "default"); got != tc.want {
+			t.Fatalf("%s: handlesInUse = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

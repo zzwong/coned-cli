@@ -230,6 +230,12 @@ const (
 	darwinSecItemSuccess   int32 = 0
 	darwinSecItemNotFound  int32 = -25300
 	darwinSecItemDuplicate int32 = -25299
+	// A locked keychain, or an item whose access list does not include this
+	// build, needs a user to approve access. Without a GUI session, as over
+	// SSH, the request is refused instead of prompting.
+	darwinSecInteractionNotAllowed int32 = -25308
+	darwinSecAuthFailed            int32 = -25293
+	darwinSecUserCanceled          int32 = -128
 )
 
 var errDarwinKeyringOperation = errors.New("secure keychain operation failed")
@@ -279,6 +285,9 @@ func (driver darwinKeyringDriver) Get(service, account string) ([]byte, error) {
 func (driver darwinKeyringDriver) Set(service, account string, value []byte) error {
 	encoded := encodeKeyringValue(value)
 	operations := driver.operations()
+	if err := driver.reclaim(service, account); err != nil {
+		return err
+	}
 	status := operations.update(service, account, encoded)
 	if status == darwinSecItemSuccess {
 		return nil
@@ -298,6 +307,25 @@ func (driver darwinKeyringDriver) Set(service, account string, value []byte) err
 	return reduceDarwinSecItemStatus(operations.update(service, account, encoded))
 }
 
+// reclaim deletes an existing item this build may not read. The Keychain lets
+// any build update an item's data but keeps the access list of the build that
+// created it, so an update would leave the value unreadable to the writer.
+// Adding a new item gives it an access list that trusts this build.
+func (driver darwinKeyringDriver) reclaim(service, account string) error {
+	result, status := driver.operations().copyMatching(service, account)
+	if result.release != nil {
+		result.release()
+	}
+	if !errors.Is(reduceDarwinSecItemStatus(status), ErrAccessDenied) {
+		return nil
+	}
+	status = driver.operations().delete(service, account)
+	if status != darwinSecItemSuccess && status != darwinSecItemNotFound {
+		return reduceDarwinSecItemStatus(status)
+	}
+	return nil
+}
+
 func (driver darwinKeyringDriver) Delete(service, account string) error {
 	return reduceDarwinSecItemStatus(driver.operations().delete(service, account))
 }
@@ -308,6 +336,8 @@ func reduceDarwinSecItemStatus(status int32) error {
 		return nil
 	case darwinSecItemNotFound:
 		return ErrNotFound
+	case darwinSecInteractionNotAllowed, darwinSecAuthFailed, darwinSecUserCanceled:
+		return ErrAccessDenied
 	default:
 		return errDarwinKeyringOperation
 	}
