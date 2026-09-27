@@ -869,3 +869,16 @@ func TestJSONLoginWithLiveSessionReportsAuthenticated(t *testing.T) {
 		t.Fatalf("stdout = %q, err = %v", stdout.String(), err)
 	}
 }
+
+func TestJSONLoginFailureKeepsStdoutFreeOfUsage(t *testing.T) {
+	var stdout bytes.Buffer
+	deps := Dependencies{Store: securestore.NewMemoryStore(), Authenticator: &fakeAuthenticator{}, Clock: time.Now, Prompter: &fakePrompter{}, PasswordTerminal: &fakeTerminal{}}
+	cmd := NewRootCommandWithDependencies(strings.NewReader(""), &stdout, io.Discard, deps)
+	cmd.SetArgs([]string{"--json", "auth", "login"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("login without credentials or a terminal succeeded")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing on failure", stdout.String())
+	}
+}

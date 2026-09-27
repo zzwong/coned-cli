@@ -29,6 +29,9 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 		command := &cobra.Command{Use: use, Short: "Authenticate with Con Edison", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			return authenticate(cmd, options.Profile, options.Timeout, deps, input, rawInput, force, noStore, passwordStdin, options.JSON)
 		}}
+		// Usage text on a failed login would land on stdout, which --json
+		// reserves for events.
+		command.SilenceUsage = true
 		command.Flags().BoolVar(&force, "force", false, "ignore any stored session")
 		command.Flags().BoolVar(&noStore, "no-store", false, "do not persist newly obtained authentication")
 		command.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read one newline-terminated password from standard input")
