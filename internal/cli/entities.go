@@ -77,7 +77,7 @@ func entityContext(cmd *cobra.Command, options *Options, deps Dependencies) ([]p
 		}
 		manager, err = identity.Load(deps.Store, options.Profile, create)
 		if err != nil {
-			return nil, nil, auth.ErrStorageFailed
+			return nil, nil, auth.StorageError(err)
 		}
 	}
 	return entities, manager, nil
@@ -245,7 +245,7 @@ func resolveEntitySelection(ctx context.Context, options *Options, deps Dependen
 	}
 	manager, err := identity.Load(deps.Store, options.Profile, false)
 	if err != nil {
-		return coned.EntitySelection{}, auth.ErrStorageFailed
+		return coned.EntitySelection{}, auth.StorageError(err)
 	}
 	var result coned.EntitySelection
 	meterParent := ""

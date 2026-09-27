@@ -230,6 +230,12 @@ const (
 	darwinSecItemSuccess   int32 = 0
 	darwinSecItemNotFound  int32 = -25300
 	darwinSecItemDuplicate int32 = -25299
+	// A locked keychain, or an item whose access list does not include this
+	// build, needs a user to approve access. Without a GUI session, as over
+	// SSH, the request is refused instead of prompting.
+	darwinSecInteractionNotAllowed int32 = -25308
+	darwinSecAuthFailed            int32 = -25293
+	darwinSecUserCanceled          int32 = -128
 )
 
 var errDarwinKeyringOperation = errors.New("secure keychain operation failed")
@@ -283,6 +289,16 @@ func (driver darwinKeyringDriver) Set(service, account string, value []byte) err
 	if status == darwinSecItemSuccess {
 		return nil
 	}
+	if errors.Is(reduceDarwinSecItemStatus(status), ErrAccessDenied) {
+		// An item this build may not modify can often still be deleted.
+		// Replacing it gives the new item an access list that trusts this
+		// build, which is what makes a fresh login a way out.
+		status = operations.delete(service, account)
+		if status != darwinSecItemSuccess && status != darwinSecItemNotFound {
+			return reduceDarwinSecItemStatus(status)
+		}
+		status = darwinSecItemNotFound
+	}
 	if status != darwinSecItemNotFound {
 		return reduceDarwinSecItemStatus(status)
 	}
@@ -308,6 +324,8 @@ func reduceDarwinSecItemStatus(status int32) error {
 		return nil
 	case darwinSecItemNotFound:
 		return ErrNotFound
+	case darwinSecInteractionNotAllowed, darwinSecAuthFailed, darwinSecUserCanceled:
+		return ErrAccessDenied
 	default:
 		return errDarwinKeyringOperation
 	}

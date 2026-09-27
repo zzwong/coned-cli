@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/zzwong/coned-cli/internal/securestore"
@@ -76,4 +77,13 @@ func SaveSession(store securestore.Store, profile string, session Session) error
 // DeleteSession removes a session for profile.
 func DeleteSession(store securestore.Store, profile string) error {
 	return store.Delete(profile, sessionKey)
+}
+
+// StorageError reduces a secure-store failure to a safe sentinel, keeping the
+// access-denied case distinct because the user can resolve it.
+func StorageError(err error) error {
+	if errors.Is(err, securestore.ErrAccessDenied) {
+		return ErrStorageAccessDenied
+	}
+	return ErrStorageFailed
 }

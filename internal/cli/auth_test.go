@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -693,5 +694,39 @@ func TestForcedLoginSkipsProviderVerification(t *testing.T) {
 	}
 	if a.verifyCalls != 0 || a.calls != 1 {
 		t.Fatalf("verify calls = %d, authenticate calls = %d", a.verifyCalls, a.calls)
+	}
+}
+
+func TestUnreadableStoredValuesExplainTheRecovery(t *testing.T) {
+	denied := fmt.Errorf("get secure value: %w", securestore.ErrAccessDenied)
+	memory := securestore.NewMemoryStore()
+	if err := auth.SaveSession(memory, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	store := failingStore{Store: memory, getErr: denied}
+	a := &fakeAuthenticator{session: validSession(time.Now())}
+
+	for _, args := range []string{"auth status", "auth login --password-stdin"} {
+		out, err := run(t, store, a, &fakePrompter{email: "a@b"}, "new\n", args)
+		if !errors.Is(err, auth.ErrStorageAccessDenied) || !errors.Is(err, auth.ErrStorageFailed) {
+			t.Fatalf("%s: err = %v", args, err)
+		}
+		if !strings.Contains(out, "auth login --force") {
+			t.Fatalf("%s: output does not name the recovery: %q", args, out)
+		}
+	}
+	if a.calls != 0 {
+		t.Fatalf("authenticated %d times without --force", a.calls)
+	}
+
+	p := &fakePrompter{email: "a@b", save: true}
+	if _, err := run(t, store, a, p, "new\n", "auth login --force --password-stdin"); err != nil {
+		t.Fatalf("forced login over unreadable values: %v", err)
+	}
+	if a.calls != 1 || p.emailCalls != 1 {
+		t.Fatalf("authenticate calls = %d, email prompts = %d", a.calls, p.emailCalls)
+	}
+	if _, err := auth.LoadCredentials(memory, "default"); err != nil {
+		t.Fatalf("forced login did not store fresh credentials: %v", err)
 	}
 }

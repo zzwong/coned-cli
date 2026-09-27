@@ -47,7 +47,7 @@ func billingSession(deps Dependencies, profile string) (auth.Session, error) {
 		if errors.Is(err, securestore.ErrNotFound) || errors.Is(err, auth.ErrInvalidSession) {
 			return auth.Session{}, coned.ErrSessionExpired
 		}
-		return auth.Session{}, auth.ErrStorageFailed
+		return auth.Session{}, auth.StorageError(err)
 	}
 	if session.State(deps.Clock()) != auth.SessionValid {
 		return auth.Session{}, coned.ErrSessionExpired
@@ -191,7 +191,7 @@ func safeBillError(err error) error {
 		// request ID intended for authentication diagnostics.
 		return &coned.ProtocolError{Status: protocol.Status}
 	}
-	for _, safe := range []error{coned.ErrSessionExpired, coned.ErrBillNotFound, coned.ErrProtocolChanged, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
+	for _, safe := range []error{coned.ErrSessionExpired, coned.ErrBillNotFound, coned.ErrProtocolChanged, auth.ErrStorageAccessDenied, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, safe) {
 			return safe
 		}

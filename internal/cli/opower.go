@@ -392,7 +392,7 @@ func flattenRecord(row map[string]any) map[string]any {
 }
 
 func safeOpowerError(err error) error {
-	for _, safe := range []error{coned.ErrSessionExpired, coned.ErrRealtimeUnavailable, coned.ErrSelectionRequired, coned.ErrProtocolChanged, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
+	for _, safe := range []error{coned.ErrSessionExpired, coned.ErrRealtimeUnavailable, coned.ErrSelectionRequired, coned.ErrProtocolChanged, auth.ErrStorageAccessDenied, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, safe) {
 			return safe
 		}

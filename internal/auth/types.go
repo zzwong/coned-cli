@@ -4,6 +4,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -28,6 +29,8 @@ var (
 	// ErrStorageFailed reports a secure-store operation failure without exposing
 	// a backend error, which might contain credentials or session data.
 	ErrStorageFailed = errors.New("secure storage operation failed")
+	// ErrStorageAccessDenied is the ErrStorageFailed case a user can act on.
+	ErrStorageAccessDenied = fmt.Errorf("%w: access denied; unlock the keychain, or run `coned auth login --force` to replace entries saved by another coned build", ErrStorageFailed)
 	// ErrPromptFailed reports interactive prompt failure without exposing an
 	// input-reader error, which might contain entered account data.
 	ErrPromptFailed = errors.New("interactive prompt failed")
