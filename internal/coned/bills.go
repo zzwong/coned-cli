@@ -119,8 +119,11 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 		return billDownloadError(id, protocolError(response))
 	}
 	documentURL, err := parseDocumentURL(body)
-	if err != nil || !validAzureBlobURL(documentURL) {
-		return billDownloadError(id, ErrProtocolChanged)
+	if err == nil {
+		err = checkDocumentURL(documentURL)
+	}
+	if err != nil {
+		return billDownloadError(id, err)
 	}
 	pdf, err := c.request(ctx, http.MethodGet, documentURL, nil, false)
 	if err != nil {
@@ -353,10 +356,19 @@ func isLoginRedirect(response *http.Response) bool {
 	return response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && strings.Contains(strings.ToLower(response.Header.Get("Location")), "/login")
 }
 
+const (
+	documentNotJSON  = "response is not JSON"
+	documentNoURL    = "response has no URL"
+	documentBadURL   = "URL is malformed"
+	documentBadHost  = "URL host is not an allowed bill store"
+	documentUnsigned = "URL is not signed"
+	documentNotPDF   = "document is not a PDF"
+)
+
 func parseDocumentURL(data []byte) (*url.URL, error) {
 	var root any
 	if json.Unmarshal(data, &root) != nil {
-		return nil, errors.New("invalid document response")
+		return nil, &DocumentError{Reason: documentNotJSON}
 	}
 	var find func(any) string
 	find = func(value any) string {
@@ -384,16 +396,36 @@ func parseDocumentURL(data []byte) (*url.URL, error) {
 		}
 		return ""
 	}
-	return url.Parse(find(root))
+	raw := find(root)
+	if raw == "" {
+		return nil, &DocumentError{Reason: documentNoURL}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, &DocumentError{Reason: documentBadURL}
+	}
+	return u, nil
 }
-func validAzureBlobURL(u *url.URL) bool {
-	return u != nil && u.Scheme == "https" && u.User == nil && u.Port() == "" &&
-		strings.HasSuffix(strings.ToLower(u.Hostname()), ".blob.core.windows.net") && u.Query().Get("sig") != ""
+
+// checkDocumentURL admits only a signed HTTPS Azure Blob URL, so a changed
+// response cannot redirect the download to an arbitrary host.
+func checkDocumentURL(u *url.URL) error {
+	if u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return &DocumentError{Reason: documentBadURL}
+	}
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasSuffix(host, ".blob.core.windows.net") {
+		return &DocumentError{Reason: documentBadHost, Host: host}
+	}
+	if u.Query().Get("sig") == "" {
+		return &DocumentError{Reason: documentUnsigned}
+	}
+	return nil
 }
 func copyPDF(dst io.Writer, source io.Reader) error {
 	prefix := make([]byte, 5)
 	if _, err := io.ReadFull(source, prefix); err != nil || string(prefix) != "%PDF-" {
-		return ErrProtocolChanged
+		return &DocumentError{Reason: documentNotPDF}
 	}
 	n, err := dst.Write(prefix)
 	if n != len(prefix) {

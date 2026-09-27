@@ -163,7 +163,7 @@ func TestBillSessionExpiryAndMissingBill(t *testing.T) {
 }
 
 func TestBillParsersRejectMalformedAndOversizedPDF(t *testing.T) {
-	if document, err := parseDocumentURL([]byte(readFixture(t, "bill_document.json"))); err != nil || !validAzureBlobURL(document) {
+	if document, err := parseDocumentURL([]byte(readFixture(t, "bill_document.json"))); err != nil || checkDocumentURL(document) != nil {
 		t.Fatalf("fixture document = %v, %v", document, err)
 	}
 	if _, err := parseBillRecords([]byte(`{"DocumentId":"opaque","BillDate":"not-a-date"}`)); err != nil {
@@ -439,5 +439,40 @@ func TestVerifySessionLeavesTheClientJarUntouched(t *testing.T) {
 	_ = client.VerifySession(context.Background(), billSession(t, server.URL))
 	if client.jar != before || client.httpClient.Jar != before {
 		t.Fatal("verification left the checked session's cookies in the client")
+	}
+}
+
+func TestDocumentFailuresNameTheBrokenContractSafely(t *testing.T) {
+	for _, tc := range []struct {
+		response, reason, host string
+	}{
+		{response: `<html>not json</html>`, reason: documentNotJSON},
+		{response: `{"data":{"file":"synthetic"}}`, reason: documentNoURL},
+		{response: `{"url":"http://synthetic.blob.core.windows.net/b.pdf?sig=secret-signature"}`, reason: documentBadURL},
+		{response: `{"url":"https://bills.example.net/b.pdf?sig=secret-signature"}`, reason: documentBadHost, host: "bills.example.net"},
+		{response: `{"url":"https://synthetic.blob.core.windows.net/b.pdf?sv=unsigned"}`, reason: documentUnsigned},
+	} {
+		u, err := parseDocumentURL([]byte(tc.response))
+		if err == nil {
+			err = checkDocumentURL(u)
+		}
+		safe := billDownloadError(localBillID("2026-01-01"), err)
+		var document *DocumentError
+		if !errors.As(safe, &document) || document.Reason != tc.reason || document.Host != tc.host {
+			t.Fatalf("%s: error = %#v", tc.response, safe)
+		}
+		if !errors.Is(safe, ErrProtocolChanged) {
+			t.Fatalf("%s: no longer matches ErrProtocolChanged", tc.response)
+		}
+		if message := safe.Error(); !strings.Contains(message, tc.reason) || strings.Contains(message, "secret-signature") {
+			t.Fatalf("%s: message = %q", tc.response, message)
+		}
+	}
+	if err := copyPDF(io.Discard, strings.NewReader("<html>")); !errors.As(err, new(*DocumentError)) {
+		t.Fatalf("non-PDF body = %v", err)
+	}
+	unsafe := billDownloadError(localBillID("2026-01-01"), &DocumentError{Reason: documentBadHost, Host: "evil.example/?sig=x"})
+	if strings.Contains(unsafe.Error(), "sig=") {
+		t.Fatalf("unvalidated host leaked: %q", unsafe.Error())
 	}
 }
