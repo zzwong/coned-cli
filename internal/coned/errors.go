@@ -33,6 +33,23 @@ func (e *ProtocolError) Error() string {
 }
 func (e *ProtocolError) Unwrap() error { return ErrProtocolChanged }
 
+// DocumentError names the part of the bill-document contract that failed, so a
+// provider change can be diagnosed from the error alone. Reason is one of this
+// package's document* constants, and Host is set only when the host is what
+// failed, so neither can carry a signed URL or bill data.
+type DocumentError struct {
+	Reason string
+	Host   string
+}
+
+func (e *DocumentError) Error() string {
+	if e.Host != "" {
+		return fmt.Sprintf("coned: bill document contract changed: %s: %s", e.Reason, e.Host)
+	}
+	return "coned: bill document contract changed: " + e.Reason
+}
+func (e *DocumentError) Unwrap() error { return ErrProtocolChanged }
+
 // BillDownloadError adds only the caller-supplied public bill ID to a safe
 // download failure. The wrapped error must never contain private request data.
 type BillDownloadError struct {
@@ -49,6 +66,14 @@ func (e *BillDownloadError) Error() string {
 }
 
 func safeBillDownloadCause(err error) error {
+	var document *DocumentError
+	if errors.As(err, &document) {
+		clean := &DocumentError{Reason: document.Reason}
+		if safeHostname(document.Host) {
+			clean.Host = document.Host
+		}
+		return clean
+	}
 	if protocol, ok := AsSafeProtocolError(err); ok {
 		// Request IDs are useful for authentication diagnostics, but bill
 		// errors are intentionally limited to the HTTP status.
@@ -107,6 +132,18 @@ func safeRequestID(headers http.Header) string {
 		}
 	}
 	return ""
+}
+
+func safeHostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, r := range host {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func safeRequestIDValue(id string) bool {
