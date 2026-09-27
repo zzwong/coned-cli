@@ -1,6 +1,7 @@
 package coned
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -174,6 +175,18 @@ func (c *Client) RestoreSession(session auth.Session) error {
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
 	return c.restoreSession(session)
+}
+
+// VerifySession asks Con Edison whether session is still live. The local
+// expiry only bounds a session's lifetime; the provider can end it sooner.
+func (c *Client) VerifySession(ctx context.Context, session auth.Session) error {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
+	if session.State(time.Now()) != auth.SessionValid || c.restoreSession(session) != nil {
+		return ErrSessionExpired
+	}
+	_, err := c.mintOpowerToken(ctx)
+	return err
 }
 
 // restoreSession is called only while operationMu is held.
