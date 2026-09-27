@@ -87,8 +87,8 @@ func TestSealedDriverRoundTripsPrivately(t *testing.T) {
 	}
 }
 
-func TestSealedDriverRejectsTamperingAndSwappedFiles(t *testing.T) {
-	driver, _, _ := newTestSealed(t)
+func TestSealedDriverReadsUnopenableValuesAsAbsent(t *testing.T) {
+	driver, keys, _ := newTestSealed(t)
 	for _, account := range []string{"a/c2Vzc2lvbg", "a/Y3JlZGVudGlhbHM"} {
 		if err := driver.Set("coned-cli", account, []byte("value-for-"+account)); err != nil {
 			t.Fatal(err)
@@ -100,15 +100,68 @@ func TestSealedDriverRejectsTamperingAndSwappedFiles(t *testing.T) {
 	if err := os.WriteFile(session, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.Get("coned-cli", "a/c2Vzc2lvbg"); !errors.Is(err, errInvalidKeyringValue) {
-		t.Fatalf("value moved to another entry: err = %v", err)
+	if _, err := driver.Get("coned-cli", "a/c2Vzc2lvbg"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("value moved to another entry: err = %v, want ErrNotFound", err)
 	}
 	raw[len(raw)-1] ^= 1
 	if err := os.WriteFile(credentials, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.Get("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, errInvalidKeyringValue) {
-		t.Fatalf("tampered value: err = %v", err)
+	if _, err := driver.Get("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("tampered value: err = %v, want ErrNotFound", err)
+	}
+
+	keys.key = bytes.Repeat([]byte{4}, keyLength)
+	if _, err := driver.Get("coned-cli", "a/c2Vzc2lvbg"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("value sealed under a replaced key: err = %v, want ErrNotFound", err)
+	}
+	if err := driver.Set("coned-cli", "a/c2Vzc2lvbg", []byte("fresh")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := driver.Get("coned-cli", "a/c2Vzc2lvbg"); err != nil || string(got) != "fresh" {
+		t.Fatalf("after replacement: %q, %v", got, err)
+	}
+}
+
+func TestSealedDriverDeleteStopsMigrationOfAStuckLegacyItem(t *testing.T) {
+	driver, _, _ := newTestSealed(t)
+	stuck := &stuckLegacy{fakeLegacy: fakeLegacy{values: map[string][]byte{"a/Y3JlZGVudGlhbHM": []byte("old-password")}}}
+	driver.legacy = stuck
+	if err := driver.Delete("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Delete() = %v, want the legacy failure reported", err)
+	}
+	if _, err := driver.Get("coned-cli", "a/Y3JlZGVudGlhbHM"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get() after logout = %v; the deleted value must not come back", err)
+	}
+}
+
+type stuckLegacy struct{ fakeLegacy }
+
+func (l *stuckLegacy) Delete(string, string) error { return ErrAccessDenied }
+
+func TestSealedDriverMigrationNeverOverwritesANewerValue(t *testing.T) {
+	driver, _, legacy := newTestSealed(t)
+	legacy.values["a/c2Vzc2lvbg"] = []byte("stale-legacy")
+	if err := driver.Set("coned-cli", "a/c2Vzc2lvbg", []byte("newer")); err != nil {
+		t.Fatal(err)
+	}
+	legacy.values["a/c2Vzc2lvbg"] = []byte("stale-legacy")
+	got, err := driver.migrate("coned-cli", "a/c2Vzc2lvbg")
+	if err != nil || string(got) != "newer" {
+		t.Fatalf("migrate() = %q, %v; want the newer sealed value", got, err)
+	}
+}
+
+func TestSealedDriverTightensAnExistingDirectory(t *testing.T) {
+	driver, _, _ := newTestSealed(t)
+	if err := os.MkdirAll(driver.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Set("coned-cli", "a/c2Vzc2lvbg", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(driver.dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("directory mode = %v, %v; want 0700", info.Mode().Perm(), err)
 	}
 }
 

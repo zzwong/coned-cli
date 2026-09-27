@@ -22,8 +22,10 @@ const (
 	keyLength  = 32
 
 	// security exits with the low byte of the OSStatus.
-	securityExitNotFound       = 44 // errSecItemNotFound
-	securityExitNotInteractive = 36 // errSecInteractionNotAllowed: locked, or needs approval
+	securityExitNotFound       = 44  // errSecItemNotFound
+	securityExitNotInteractive = 36  // errSecInteractionNotAllowed
+	securityExitAuthFailed     = 51  // errSecAuthFailed
+	securityExitUserCanceled   = 128 // errSecUserCanceled
 )
 
 var errKeyTool = errors.New("keychain key tool failed")
@@ -53,8 +55,10 @@ func (k securityToolKeys) read(service string) ([]byte, error) {
 	switch {
 	case errors.As(err, &exit) && exit.ExitCode() == securityExitNotFound:
 		return nil, ErrNotFound
-	case errors.As(err, &exit) && exit.ExitCode() == securityExitNotInteractive:
-		return nil, ErrAccessDenied
+	case errors.As(err, &exit) && lockedExit(exit.ExitCode()):
+		// The key item trusts the tool, so a refusal can only mean the
+		// keychain is locked and could not be unlocked.
+		return nil, ErrLocked
 	case err != nil:
 		return nil, errKeyTool
 	}
@@ -77,4 +81,8 @@ func (k securityToolKeys) add(service string, key []byte) error {
 		return errKeyTool
 	}
 	return nil
+}
+
+func lockedExit(code int) bool {
+	return code == securityExitNotInteractive || code == securityExitAuthFailed || code == securityExitUserCanceled
 }

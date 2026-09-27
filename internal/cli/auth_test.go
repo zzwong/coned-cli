@@ -808,3 +808,12 @@ func TestHandlesInUseFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestLockedStoreAsksTheUserToUnlock(t *testing.T) {
+	locked := fmt.Errorf("get secure value: %w", securestore.ErrLocked)
+	store := failingStore{Store: securestore.NewMemoryStore(), getErr: locked}
+	out, err := run(t, store, &fakeAuthenticator{}, &fakePrompter{}, "", "auth status")
+	if !errors.Is(err, auth.ErrStorageLocked) || !strings.Contains(out, "security unlock-keychain") {
+		t.Fatalf("err = %v, output = %q", err, out)
+	}
+}

@@ -80,8 +80,11 @@ func DeleteSession(store securestore.Store, profile string) error {
 }
 
 // StorageError reduces a secure-store failure to a safe sentinel, keeping the
-// access-denied case distinct because the user can resolve it.
+// locked and access-denied cases distinct because the user can resolve them.
 func StorageError(err error) error {
+	if errors.Is(err, securestore.ErrLocked) {
+		return ErrStorageLocked
+	}
 	if errors.Is(err, securestore.ErrAccessDenied) {
 		return ErrStorageAccessDenied
 	}

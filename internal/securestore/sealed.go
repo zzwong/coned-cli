@@ -57,13 +57,22 @@ func (d sealedDriver) Get(service, account string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(sealed) == 0 {
+		return nil, ErrNotFound
+	}
 	key, err := d.keys.Key(service, false)
 	if err != nil {
-		// Without its key a sealed value is unrecoverable, and reporting it
-		// as absent lets the next login replace it.
 		return nil, err
 	}
-	return open(key, service, account, sealed)
+	value, err := open(key, service, account, sealed)
+	if err != nil {
+		// A value that will not open was sealed under a replaced key or is
+		// damaged; either way it is lost. Reporting it as absent lets the
+		// next write replace it. Authentication still keeps a forged value
+		// from ever being returned.
+		return nil, ErrNotFound
+	}
+	return value, nil
 }
 
 // migrate moves a value an earlier build stored directly in the Keychain into
@@ -76,13 +85,21 @@ func (d sealedDriver) migrate(service, account string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := d.Set(service, account, value); err != nil {
+	// Another process may have written a newer value since this one found no
+	// file, and that value must win over the stale legacy one.
+	if err := d.put(service, account, value, false); errors.Is(err, fs.ErrExist) {
+		return d.Get(service, account)
+	} else if err != nil {
 		return nil, err
 	}
 	return value, nil
 }
 
 func (d sealedDriver) Set(service, account string, value []byte) error {
+	return d.put(service, account, value, true)
+}
+
+func (d sealedDriver) put(service, account string, value []byte, replace bool) error {
 	path, err := d.path(service, account)
 	if err != nil {
 		return err
@@ -95,7 +112,7 @@ func (d sealedDriver) Set(service, account string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(path, sealed); err != nil {
+	if err := writeFileAtomic(path, sealed, replace); err != nil {
 		return err
 	}
 	// The sealed file now takes precedence, so a legacy item that cannot be
@@ -111,19 +128,26 @@ func (d sealedDriver) Delete(service, account string) error {
 	if err != nil {
 		return err
 	}
-	fileErr := os.Remove(path)
-	legacyErr := ErrNotFound
+	existing, _ := os.ReadFile(path)
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	legacyErr := error(ErrNotFound)
 	if d.legacy != nil {
 		legacyErr = d.legacy.Delete(service, account)
 	}
-	switch {
-	case fileErr != nil && !errors.Is(fileErr, fs.ErrNotExist):
-		return fileErr
-	case fileErr == nil:
-		return nil
-	default:
+	if legacyErr != nil && !errors.Is(legacyErr, ErrNotFound) {
+		// A legacy item left behind would be migrated back by a later read.
+		// An empty file stops that, since Get treats it as absent.
+		if err := writeFileAtomic(path, nil, true); err != nil {
+			return err
+		}
 		return legacyErr
 	}
+	if len(existing) > 0 || legacyErr == nil {
+		return nil
+	}
+	return ErrNotFound
 }
 
 func additionalData(service, account string) []byte {
@@ -167,9 +191,15 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-func writeFileAtomic(path string, data []byte) error {
+// writeFileAtomic writes data under a temporary name and moves it into place.
+// Without replace, an existing file is kept and fs.ErrExist is returned.
+func writeFileAtomic(path string, data []byte, replace bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll leaves an existing directory's mode alone.
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	file, err := os.CreateTemp(dir, ".sealed-*")
@@ -188,6 +218,9 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if !replace {
+		return os.Link(temp, path)
 	}
 	return os.Rename(temp, path)
 }

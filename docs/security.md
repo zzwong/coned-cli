@@ -4,10 +4,11 @@
 
 ## Storage
 
-- macOS keeps each secret in its own file under `~/Library/Application Support/coned/secrets` (mode `0600` in a `0700` directory), encrypted with AES-256-GCM and bound to its entry name. The 32-byte key lives in the login Keychain and is read and written only through `/usr/bin/security`.
+- macOS keeps each secret in its own file under `~/Library/Application Support/coned/secrets` (mode `0600` in a `0700` directory), encrypted with AES-256-GCM and bound to its entry name. The 32-byte key lives in the login Keychain and is read and written only through `/usr/bin/security`. A value that fails to decrypt, because its key was replaced or the file was damaged, reads as absent and is replaced by the next login.
   - The Keychain pins an item to the code identity that created it, and coned builds are ad-hoc signed, so an item written by coned itself would be unreadable to every later build. Apple's tool keeps one identity, so upgrades keep access without re-authentication.
   - The key item trusts only that tool, but any process running as the user can ask the tool for it while the Keychain is unlocked. The threat model below already excludes other processes of the same user.
   - Secrets that earlier releases stored directly in the Keychain move to sealed files the first time they are read. If an upgrade can no longer read one, `coned auth login --force` replaces it.
+  - The Keychain can refuse to delete such an item, for example over SSH. It then stays in the Keychain, but once coned has written or deleted that entry it is never read again, and logout reports the failure.
 - Linux uses the freedesktop.org Secret Service API over D-Bus, commonly provided by GNOME Keyring. A default collection named `login` must be available.
 - There is no plaintext fallback. Headless Linux must provide a working Secret Service session or use `auth login --no-store`.
 - Non-secret configuration is stored at the OS configuration path with mode `0600`.

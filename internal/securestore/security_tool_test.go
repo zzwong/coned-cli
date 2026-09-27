@@ -57,7 +57,7 @@ func TestSecurityToolKeysCreateOnceAndKeepTheKeyOffArgv(t *testing.T) {
 }
 
 func TestSecurityToolKeysMapExitCodes(t *testing.T) {
-	for code, want := range map[string]error{"36": ErrAccessDenied, "1": errKeyTool} {
+	for code, want := range map[string]error{"36": ErrLocked, "51": ErrLocked, "128": ErrLocked, "1": errKeyTool} {
 		tool, _ := stubSecurityTool(t, code)
 		if _, err := (securityToolKeys{tool: tool}).Key("coned-cli", false); !errors.Is(err, want) {
 			t.Fatalf("exit %s: err = %v, want %v", code, err, want)
