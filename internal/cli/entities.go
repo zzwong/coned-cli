@@ -271,14 +271,15 @@ func validEntityHandle(v string) bool {
 }
 
 // handlesInUse reports whether saved aliases or defaults refer to handles
-// derived from the profile's current key, which a new key would orphan.
+// derived from the profile's current key, which a new key would orphan. A
+// configuration that cannot be read counts as in use.
 func handlesInUse(deps Dependencies, profile string) bool {
 	if deps.ConfigPath == "" {
 		return false
 	}
 	cfg, err := config.Load(deps.ConfigPath)
 	if err != nil {
-		return false
+		return true
 	}
 	selection := cfg.Selections[profile]
 	return len(selection.Aliases) != 0 || selection.DefaultAccount != "" || selection.DefaultMeter != ""
