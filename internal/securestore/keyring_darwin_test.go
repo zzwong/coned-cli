@@ -278,20 +278,28 @@ func TestDarwinKeyringDriverReportsAccessDenial(t *testing.T) {
 	}
 }
 
-func TestDarwinKeyringDriverReplacesItemItMayNotModify(t *testing.T) {
-	fake := &fakeDarwinSecItemOps{updateStatus: []int32{darwinSecInteractionNotAllowed}}
+func TestDarwinKeyringDriverReplacesItemItMayNotRead(t *testing.T) {
+	fake := &fakeDarwinSecItemOps{copyStatus: darwinSecInteractionNotAllowed, updateStatus: []int32{darwinSecItemNotFound}}
 	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); err != nil {
 		t.Fatal(err)
 	}
 	if fake.deleteAccount != "account" || len(fake.addValues) != 1 {
-		t.Fatalf("delete=%q adds=%d, want the item deleted and added again", fake.deleteAccount, len(fake.addValues))
+		t.Fatalf("delete=%q adds=%d, want the unreadable item deleted and added again", fake.deleteAccount, len(fake.addValues))
 	}
 
-	fake = &fakeDarwinSecItemOps{updateStatus: []int32{darwinSecInteractionNotAllowed}, deleteStatus: darwinSecInteractionNotAllowed}
+	fake = &fakeDarwinSecItemOps{copyStatus: darwinSecItemSuccess}
+	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deleteAccount != "" || len(fake.updateValues) != 1 {
+		t.Fatal("a readable item was replaced instead of updated in place")
+	}
+
+	fake = &fakeDarwinSecItemOps{copyStatus: darwinSecInteractionNotAllowed, deleteStatus: darwinSecInteractionNotAllowed}
 	if err := (darwinKeyringDriver{ops: fake}).Set("coned-cli", "account", []byte("value")); !errors.Is(err, ErrAccessDenied) {
 		t.Fatalf("undeletable item: Set() error = %v, want ErrAccessDenied", err)
 	}
-	if len(fake.addValues) != 0 {
-		t.Fatal("added a value after the existing item could not be removed")
+	if len(fake.updateValues) != 0 || len(fake.addValues) != 0 {
+		t.Fatal("wrote a value after the unreadable item could not be removed")
 	}
 }
