@@ -159,6 +159,9 @@ func (c *Client) billRecords(ctx context.Context, session auth.Session) (billing
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
 		return nil, nil, ErrSessionExpired
 	}
+	if response.StatusCode >= 500 && c.sessionRejected(ctx) {
+		return nil, nil, ErrSessionExpired
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, nil, protocolError(response)
 	}

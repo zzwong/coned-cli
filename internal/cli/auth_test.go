@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zzwong/coned-cli/internal/auth"
+	"github.com/zzwong/coned-cli/internal/coned"
 	"github.com/zzwong/coned-cli/internal/securestore"
 )
 
@@ -623,5 +624,74 @@ func TestNotImplementedAuthenticatorErrorIsPreserved(t *testing.T) {
 	}
 	if strings.Contains(output, "not-a-real-password-value") {
 		t.Fatalf("secret leaked in output: %q", output)
+	}
+}
+
+type verifyingAuthenticator struct {
+	fakeAuthenticator
+	verifyErr   error
+	verifyCalls int
+	restored    []auth.Session
+}
+
+func (a *verifyingAuthenticator) VerifySession(context.Context, auth.Session) error {
+	a.verifyCalls++
+	return a.verifyErr
+}
+func (a *verifyingAuthenticator) RestoreSession(session auth.Session) error {
+	a.restored = append(a.restored, session)
+	return nil
+}
+
+func TestLoginConfirmsStoredSessionWithProvider(t *testing.T) {
+	now := time.Now()
+	stored := validSession(now)
+	stored.Cookies = append(stored.Cookies, auth.Cookie{Name: "CE_DEVICE_ID", Value: "remembered-device"})
+	for _, tc := range []struct {
+		name      string
+		verifyErr error
+		wantCalls int
+		wantErr   error
+	}{
+		{name: "live session is reused", wantCalls: 0},
+		{name: "provider-ended session is replaced", verifyErr: coned.ErrSessionExpired, wantCalls: 1},
+		{name: "provider fault is reported, not papered over", verifyErr: &coned.ProtocolError{Status: 503}, wantErr: coned.ErrProtocolChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := securestore.NewMemoryStore()
+			if err := auth.SaveSession(store, "default", stored); err != nil {
+				t.Fatal(err)
+			}
+			a := &verifyingAuthenticator{fakeAuthenticator: fakeAuthenticator{session: validSession(now)}, verifyErr: tc.verifyErr}
+			deps := Dependencies{Store: store, Authenticator: a, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}}
+			_, err := runWithDependencies(t, deps, "new\n", "auth login --password-stdin")
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if a.verifyCalls != 1 || a.calls != tc.wantCalls {
+				t.Fatalf("verify calls = %d, authenticate calls = %d", a.verifyCalls, a.calls)
+			}
+			if tc.wantCalls == 1 {
+				restored := a.restored[len(a.restored)-1].Cookies
+				if len(restored) != 1 || restored[0].Name != "CE_DEVICE_ID" {
+					t.Fatalf("replacement login restored %#v, want only the remembered device", restored)
+				}
+			}
+		})
+	}
+}
+
+func TestForcedLoginSkipsProviderVerification(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	if err := auth.SaveSession(store, "default", validSession(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	a := &verifyingAuthenticator{fakeAuthenticator: fakeAuthenticator{session: validSession(time.Now())}}
+	deps := Dependencies{Store: store, Authenticator: a, Clock: time.Now, Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}}
+	if _, err := runWithDependencies(t, deps, "new\n", "auth login --force --password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if a.verifyCalls != 0 || a.calls != 1 {
+		t.Fatalf("verify calls = %d, authenticate calls = %d", a.verifyCalls, a.calls)
 	}
 }

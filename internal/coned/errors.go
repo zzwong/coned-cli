@@ -13,7 +13,7 @@ var (
 	ErrInvalidCredentials = errors.New("coned: invalid credentials")
 	ErrMFARequired        = errors.New("coned: multi-factor authentication required")
 	ErrChallengeRequired  = errors.New("coned: authentication challenge required")
-	ErrSessionExpired     = errors.New("coned: session expired")
+	ErrSessionExpired     = errors.New("coned: session expired; run `coned auth login`")
 	ErrProtocolChanged    = errors.New("coned: login protocol changed")
 	ErrBillNotFound       = errors.New("coned: bill not found")
 )

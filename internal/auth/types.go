@@ -82,6 +82,11 @@ type SessionRestorer interface {
 	RestoreSession(Session) error
 }
 
+// SessionVerifier asks the provider whether a stored session is still live.
+type SessionVerifier interface {
+	VerifySession(context.Context, Session) error
+}
+
 // NotImplementedAuthenticator is the safe default until a service-specific
 // authenticator is configured. It never performs network authentication.
 type NotImplementedAuthenticator struct{}

@@ -71,9 +71,23 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin bool) error {
 	storedSession, sessionErr := auth.LoadSession(deps.Store, profile)
 	if sessionErr == nil {
+		// A session the provider has ended is replaced as --force would, but
+		// only the session: force keeps meaning what the user asked for.
+		replace := force
+		if !force && storedSession.State(deps.Clock()) == auth.SessionValid {
+			live, err := sessionLive(cmd, timeout, deps, storedSession)
+			if err != nil {
+				return err
+			}
+			if live {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
+				return err
+			}
+			replace = true
+		}
 		if restorer, ok := deps.Authenticator.(auth.SessionRestorer); ok {
 			restore := storedSession
-			if force {
+			if replace {
 				restore.Cookies = nil
 				for _, cookie := range storedSession.Cookies {
 					if cookie.Name == "CE_DEVICE_ID" {
@@ -82,10 +96,6 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 				}
 			}
 			_ = restorer.RestoreSession(restore)
-		}
-		if !force && storedSession.State(deps.Clock()) == auth.SessionValid {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
-			return err
 		}
 	} else if !errors.Is(sessionErr, securestore.ErrNotFound) && !errors.Is(sessionErr, auth.ErrInvalidSession) {
 		return auth.ErrStorageFailed
@@ -208,6 +218,26 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
 	return err
+}
+
+// sessionLive confirms a locally unexpired session with the provider, so a
+// session the provider has already ended is replaced instead of reused.
+// Authenticators that cannot verify are trusted on the local expiry.
+func sessionLive(cmd *cobra.Command, timeout time.Duration, deps Dependencies, session auth.Session) (bool, error) {
+	verifier, ok := deps.Authenticator.(auth.SessionVerifier)
+	if !ok {
+		return true, nil
+	}
+	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	defer cancel()
+	err := verifier.VerifySession(ctx, session)
+	if errors.Is(err, coned.ErrSessionExpired) {
+		return false, nil
+	}
+	if err != nil {
+		return false, safeAuthenticationError(err)
+	}
+	return true, nil
 }
 
 func safeAuthenticationError(err error) error {

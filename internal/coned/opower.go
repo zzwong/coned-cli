@@ -75,11 +75,26 @@ func (c *Client) mintOpowerToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", ErrProtocolChanged
 	}
-	var token string
-	if response.StatusCode == http.StatusOK && json.Unmarshal(body, &token) == nil && token != "" {
-		return token, nil
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
+		return "", ErrSessionExpired
 	}
-	return "", ErrSessionExpired
+	if response.StatusCode != http.StatusOK {
+		return "", protocolError(response)
+	}
+	var token string
+	if json.Unmarshal(body, &token) != nil || token == "" {
+		return "", ErrSessionExpired
+	}
+	return token, nil
+}
+
+// sessionRejected reports whether Con Edison no longer accepts the session in
+// the client's jar. Some endpoints answer an ended session with a server error,
+// so a 5xx from them is ambiguous until the token endpoint, which answers 403,
+// settles it. Called only while operationMu is held.
+func (c *Client) sessionRejected(ctx context.Context) bool {
+	_, err := c.mintOpowerToken(ctx)
+	return errors.Is(err, ErrSessionExpired)
 }
 
 func (c *Client) opower(ctx context.Context, session auth.Session, operation, query string, variables any, output any) error {
