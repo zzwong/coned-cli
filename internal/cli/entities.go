@@ -68,14 +68,7 @@ func entityContext(cmd *cobra.Command, options *Options, deps Dependencies) ([]p
 	if options.Demo {
 		manager = identity.Deterministic("default")
 	} else {
-		create := true
-		if deps.ConfigPath != "" {
-			if cfg, loadErr := config.Load(deps.ConfigPath); loadErr == nil {
-				selection := cfg.Selections[options.Profile]
-				create = len(selection.Aliases) == 0 && selection.DefaultAccount == "" && selection.DefaultMeter == ""
-			}
-		}
-		manager, err = identity.Load(deps.Store, options.Profile, create)
+		manager, err = identity.Load(deps.Store, options.Profile, !handlesInUse(deps, options.Profile))
 		if err != nil {
 			return nil, nil, auth.StorageError(err)
 		}
@@ -275,4 +268,18 @@ func validEntityHandle(v string) bool {
 		}
 	}
 	return false
+}
+
+// handlesInUse reports whether saved aliases or defaults refer to handles
+// derived from the profile's current key, which a new key would orphan.
+func handlesInUse(deps Dependencies, profile string) bool {
+	if deps.ConfigPath == "" {
+		return false
+	}
+	cfg, err := config.Load(deps.ConfigPath)
+	if err != nil {
+		return false
+	}
+	selection := cfg.Selections[profile]
+	return len(selection.Aliases) != 0 || selection.DefaultAccount != "" || selection.DefaultMeter != ""
 }

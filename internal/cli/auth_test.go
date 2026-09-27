@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -728,5 +730,43 @@ func TestUnreadableStoredValuesExplainTheRecovery(t *testing.T) {
 	}
 	if _, err := auth.LoadCredentials(memory, "default"); err != nil {
 		t.Fatalf("forced login did not store fresh credentials: %v", err)
+	}
+}
+
+func TestForcedLoginReclaimsAnUnreadableHandleKeyOnlyWhenUnused(t *testing.T) {
+	denied := fmt.Errorf("get secure value: %w", securestore.ErrAccessDenied)
+	for _, tc := range []struct {
+		name        string
+		config      string
+		wantReplace bool
+	}{
+		{name: "no saved selections", config: `{}`, wantReplace: true},
+		{name: "aliases refer to current handles", config: `{"selections":{"default":{"aliases":{"home":"account-aaaaaaaaaaaa"}}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memory := securestore.NewMemoryStore()
+			if err := memory.Set("default", "entity-handle-key-v1", bytes.Repeat([]byte{7}, 32)); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			a := &fakeAuthenticator{session: validSession(time.Now())}
+			deps := Dependencies{
+				Store: failingStore{Store: memory, getErr: denied, getKey: "entity-handle-key-v1"}, Authenticator: a, Clock: time.Now,
+				Prompter: &fakePrompter{email: "a@b"}, PasswordTerminal: &fakeTerminal{}, ConfigPath: configPath,
+			}
+			if _, err := runWithDependencies(t, deps, "new\n", "auth login --force --password-stdin"); err != nil {
+				t.Fatal(err)
+			}
+			key, err := memory.Get("default", "entity-handle-key-v1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replaced := !bytes.Equal(key, bytes.Repeat([]byte{7}, 32)); replaced != tc.wantReplace {
+				t.Fatalf("key replaced = %v, want %v", replaced, tc.wantReplace)
+			}
+		})
 	}
 }
