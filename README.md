@@ -78,6 +78,12 @@ printf '%s\n' "$CONED_PASSWORD" | \
   coned auth login --password-stdin --no-store
 ```
 
+For automation, `--json` makes `auth login` write one JSON event per line to standard output, and prompts go to standard error. `{"event":"mfa_required"}` is written just before the verification code is read from standard input, and `{"event":"authenticated"}` ends a successful login:
+
+```bash
+coned --json auth login
+```
+
 There is intentionally no `--password` argument.
 
 If native login is unavailable, `auth import-browser` can import an authenticated local Chrome or Brave session over a loopback CDP endpoint:
