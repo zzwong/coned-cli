@@ -9,7 +9,7 @@ A headless CLI for accessing Con Edison account, billing, and energy-usage data.
 `coned` supports:
 
 - Native login with SMS MFA and remembered devices
-- Secure credential and session storage through the OS keyring
+- Secure credential and session storage backed by the OS keyring
 - Bill history and validated PDF downloads
 - Historical usage, costs, forecasts, weather, and neighbor comparisons
 - Green Button CSV, JSON, XML, and ZIP exports
@@ -63,7 +63,7 @@ coned auth logout
 coned auth logout --forget
 ```
 
-Interactive password input is hidden. With persistence enabled, credentials and session cookies are stored only in macOS Keychain or Linux Secret Service. Credentials are saved only after confirmation, and there is no plaintext fallback.
+Interactive password input is hidden. With persistence enabled, credentials and session cookies are stored in Linux Secret Service, or on macOS in files encrypted with a key held in the Keychain, which keeps access across upgrades ([details](docs/security.md#storage)). Credentials are saved only after confirmation, and there is no plaintext fallback.
 
 For a one-off session:
 
@@ -143,7 +143,7 @@ All usage commands are read-only. Missing real-time readings are reported as una
 
 ## Accounts and meters
 
-Provider identifiers can be represented by stable, profile-specific HMAC handles. The HMAC key is stored in the OS keyring. Raw account, premise, meter, and register identifiers are not written to configuration or diagnostic files.
+Provider identifiers can be represented by stable, profile-specific HMAC handles. The HMAC key is stored with the other secrets. Raw account, premise, meter, and register identifiers are not written to configuration or diagnostic files.
 
 ```bash
 coned entities list

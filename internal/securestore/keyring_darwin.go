@@ -257,7 +257,7 @@ type darwinKeyringDriver struct {
 }
 
 func newKeyringDriver() keyringDriver {
-	return darwinKeyringDriver{ops: darwinSecItemCgoOps{}}
+	return newSealedDriver(darwinKeyringDriver{ops: darwinSecItemCgoOps{}})
 }
 
 func (driver darwinKeyringDriver) operations() darwinSecItemOps {

@@ -2,24 +2,8 @@
 
 package securestore
 
-import "errors"
-
-var errKeyringUnavailable = errors.New("secure keyring unavailable")
-
-type darwinNoCGOKeyringDriver struct{}
-
+// Without cgo there is no native Keychain access, so values stored directly
+// in the Keychain by earlier builds cannot be migrated.
 func newKeyringDriver() keyringDriver {
-	return darwinNoCGOKeyringDriver{}
-}
-
-func (darwinNoCGOKeyringDriver) Get(string, string) ([]byte, error) {
-	return nil, errKeyringUnavailable
-}
-
-func (darwinNoCGOKeyringDriver) Set(string, string, []byte) error {
-	return errKeyringUnavailable
-}
-
-func (darwinNoCGOKeyringDriver) Delete(string, string) error {
-	return errKeyringUnavailable
+	return newSealedDriver(nil)
 }
