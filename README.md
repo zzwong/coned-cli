@@ -39,7 +39,7 @@ To build from a checkout:
 make install
 ```
 
-Go 1.25.13 or newer is required. Release binaries are available for Linux and macOS on amd64 and arm64.
+Go 1.26.8 or newer is required. Release binaries are available for Linux and macOS on amd64 and arm64.
 
 ## Try it without an account
 
