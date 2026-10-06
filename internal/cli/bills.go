@@ -48,6 +48,7 @@ func newBillsCommand(options *Options, deps Dependencies) *cobra.Command {
 	download.Flags().StringVarP(&output, "output", "o", "", "PDF output path")
 	download.Flags().BoolVar(&force, "force", false, "replace an existing regular file")
 	bills.AddCommand(download)
+	bills.AddCommand(newBillSyncCommand(options, deps))
 	return bills
 }
 
@@ -237,7 +238,7 @@ func safeBillError(err error) error {
 		// request ID intended for authentication diagnostics.
 		return &coned.ProtocolError{Status: protocol.Status}
 	}
-	for _, safe := range []error{coned.ErrSessionExpired, coned.ErrBillNotFound, coned.ErrProtocolChanged, auth.ErrStorageLocked, auth.ErrStorageAccessDenied, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
+	for _, safe := range []error{coned.ErrSelectionRequired, coned.ErrSessionExpired, coned.ErrBillNotFound, coned.ErrProtocolChanged, auth.ErrStorageLocked, auth.ErrStorageAccessDenied, auth.ErrStorageFailed, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, safe) {
 			return safe
 		}

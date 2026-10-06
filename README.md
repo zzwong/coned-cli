@@ -99,9 +99,36 @@ coned bills list
 coned --json bills list
 coned bills download 2026-06-30-<id>
 coned bills download 2026-06-30-<id> --output bill.pdf
+coned bills sync --directory "$HOME/Bills"
+coned --json-envelope bills sync --since 2026-01-01 --directory "$HOME/Bills"
 ```
 
 Bill PDFs are first written to an owner-only temporary file with mode `0600`. Before atomically moving the file to its destination, `coned` verifies the PDF file signature and enforces the download size limit. Existing files are left unchanged unless you pass `--force`.
+
+`bills sync` is an automation command for Linux and macOS. The directory must
+already exist. It downloads only the newest bill when `--since` is omitted;
+otherwise it downloads bills with a document date strictly later than the
+exclusive `--since YYYY-MM-DD` cutoff. It processes selected dates oldest
+first and writes `coned-bill-<public-bill-id>.pdf` without replacing existing
+files. Existing files are skipped only after owner, regular-file, PDF-signature,
+size, and checksum verification. Invalid files, symlinks, and other conflicts
+remain untouched and are reported in the manifest.
+
+Bill IDs are date-derived, so v1 cannot distinguish two provider documents
+issued on the same date. Sync fails closed with `selection_required` if the
+provider returns that ambiguity; it does not invent a document-specific name.
+If one bill fails, completed files remain and later candidates are marked
+`not_attempted` after a systemic failure. The error envelope retains the full
+partial manifest. Rerun the same command to verify and skip completed files,
+then retry missing bills. A matching SHA-256 proves local file integrity, not
+that an older retained PDF is the newest provider copy.
+
+Use `--demo` for a deterministic synthetic bill and PDF without loading a
+session or contacting Con Edison:
+
+```bash
+coned --demo --json-envelope bills sync --directory "$HOME/Bills"
+```
 
 ## Usage data
 
@@ -192,6 +219,7 @@ retried by the caller; it never authorizes an authentication or MFA retry.
 | `bill_not_found` | The requested public bill handle was not found. |
 | `output_conflict` | The destination exists or conflicts with a safe file write. |
 | `output_failed` | The output could not be written or published. |
+| `unsupported_platform` | This operation requires filesystem protections unavailable on this platform. |
 | `internal_error` | An unclassified failure occurred; private details are omitted. |
 
 Example migration: keep `coned --json bills list` if the current array shape is

@@ -59,6 +59,171 @@ func TestListBillsUsesAuthenticatedHistoryAndReturnsPublicNewestFirst(t *testing
 	}
 }
 
+func TestListBillsForSyncRejectsSameDayProviderDocumentCollision(t *testing.T) {
+	listCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case billHistoryPath:
+			_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
+		case residentialBillHistoryPath:
+			listCalls++
+			_, _ = io.WriteString(w, `{"data":[{"BillDate":"2026-02-15","DocumentId":"opaque-source-one","DocumentType":"bill"},{"BillDate":"2026-02-15","DocumentId":"opaque-source-two","DocumentType":"bill"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+	session := billSession(t, server.URL)
+	legacy, err := client.ListBills(context.Background(), session)
+	if err != nil || len(legacy) != 1 {
+		t.Fatalf("legacy listing changed: bills=%#v err=%v", legacy, err)
+	}
+	syncBills, err := client.ListBillsForSync(context.Background(), session)
+	if !errors.Is(err, ErrSelectionRequired) || len(syncBills) != 0 {
+		t.Fatalf("strict sync list=%#v err=%v, want selection required", syncBills, err)
+	}
+	if listCalls != 2 {
+		t.Fatalf("history list calls=%d, want legacy and strict requests", listCalls)
+	}
+}
+
+func TestListBillsForSyncRejectsConflictingBillingMetadataBeforeList(t *testing.T) {
+	var listCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case billHistoryPath:
+			_, _ = io.WriteString(w, `<div data-account-maid="synthetic-one" data-maid="synthetic-two" data-sc-id="synthetic-sitecore"></div>`)
+		case residentialBillHistoryPath:
+			listCalls++
+			_, _ = io.WriteString(w, `[]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+	bills, err := client.ListBillsForSync(context.Background(), billSession(t, server.URL))
+	if !errors.Is(err, ErrSelectionRequired) || len(bills) != 0 || listCalls != 0 {
+		t.Fatalf("strict scope was not rejected before provider list: bills=%#v err=%v calls=%d", bills, err, listCalls)
+	}
+}
+
+func TestListBillsForSyncRejectsOversizedHistoryResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case billHistoryPath:
+			_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
+		case residentialBillHistoryPath:
+			_, _ = io.WriteString(w, "[]"+strings.Repeat(" ", maxBillHistoryBodyBytes))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+	bills, err := client.ListBillsForSync(context.Background(), billSession(t, server.URL))
+	if !errors.Is(err, ErrProtocolChanged) || len(bills) != 0 {
+		t.Fatalf("oversized strict history accepted: bills=%#v err=%v", bills, err)
+	}
+}
+
+func TestDownloadBillForSyncRechecksScopeAndDocuments(t *testing.T) {
+	for _, mode := range []string{"conflicting scope", "scope changed", "same-date source collision"} {
+		t.Run(mode, func(t *testing.T) {
+			historyPageCalls := 0
+			listCalls := 0
+			documentCalls := 0
+			pdfCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case billHistoryPath:
+					historyPageCalls++
+					if mode == "conflicting scope" && historyPageCalls > 1 {
+						_, _ = io.WriteString(w, `<div data-account-maid="synthetic-one" data-maid="synthetic-two" data-sc-id="synthetic-sitecore"></div>`)
+						return
+					}
+					if mode == "scope changed" && historyPageCalls > 1 {
+						_, _ = io.WriteString(w, `<div data-account-maid="synthetic-other" data-sc-id="synthetic-sitecore"></div>`)
+						return
+					}
+					_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
+				case residentialBillHistoryPath:
+					listCalls++
+					if mode == "same-date source collision" && listCalls > 1 {
+						_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-one"},{"BillDate":"2026-02-15","DocumentId":"opaque-two"}]`)
+						return
+					}
+					_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque-one"}]`)
+				case billInsertImagePath:
+					documentCalls++
+					_, _ = io.WriteString(w, `{"url":"https://synthetic.blob.core.windows.net/bill.pdf?sig=secret"}`)
+				case "/bill.pdf":
+					pdfCalls++
+					_, _ = io.WriteString(w, "%PDF-synthetic")
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client := testClient(t, server)
+			session := billSession(t, server.URL)
+			bills, err := client.ListBillsForSync(context.Background(), session)
+			if err != nil || len(bills) != 1 {
+				t.Fatalf("initial strict list=%#v err=%v", bills, err)
+			}
+			err = client.DownloadBillForSync(context.Background(), session, localBillID("2026-02-15"), io.Discard)
+			if !errors.Is(err, ErrSelectionRequired) || strings.Contains(errString(err), "opaque-") || strings.Contains(errString(err), "secret") {
+				t.Fatalf("strict download error=%v, want safe selection required", err)
+			}
+			if documentCalls != 0 || pdfCalls != 0 {
+				t.Fatalf("ambiguous selection reached document endpoints: document=%d pdf=%d", documentCalls, pdfCalls)
+			}
+			if mode == "scope changed" && listCalls != 1 {
+				t.Fatalf("changed scope reached a second bill-list request: calls=%d", listCalls)
+			}
+		})
+	}
+}
+
+func TestStrictBillSyncParserRejectsInvalidDateAndConflictingSameDateRows(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want error
+	}{
+		{name: "invalid date", body: `[{"DocumentId":"opaque","BillDate":"not-a-date"}]`, want: ErrProtocolChanged},
+		{name: "duplicate JSON key", body: `[{"DocumentId":"opaque-one","DocumentId":"opaque-two","BillDate":"2026-02-15"}]`, want: ErrProtocolChanged},
+		{name: "conflicting normalized JSON keys", body: `[{"DocumentId":"opaque-one","document-id":"opaque-two","BillDate":"2026-02-15"}]`, want: ErrSelectionRequired},
+		{name: "conflicting date aliases", body: `[{"DocumentId":"opaque-one","BillDate":"2026-02-15","date":"2026-02-16"}]`, want: ErrSelectionRequired},
+		{name: "conflicting HTML document attributes", body: `<a data-document-id="opaque-one" data-document-id="opaque-two" data-bill-date="2026-02-15"></a>`, want: ErrSelectionRequired},
+		{name: "same-date source collision", body: `[{"DocumentId":"opaque-one","BillDate":"2026-02-15"},{"DocumentId":"opaque-two","BillDate":"2026-02-15"}]`, want: ErrSelectionRequired},
+		{name: "same source conflicting metadata", body: `[{"DocumentId":"opaque-one","BillDate":"2026-02-15","Cycle":"one"},{"DocumentId":"opaque-one","BillDate":"2026-02-15","Cycle":"two"}]`, want: ErrSelectionRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			records, err := parseBillRecordsForSync([]byte(tc.body))
+			if !errors.Is(err, tc.want) || len(records) != 0 {
+				t.Fatalf("strict parse = %#v, %v; want %v", records, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestStrictBillSyncParserAcceptsRecognizedEmptyHistoriesOnly(t *testing.T) {
+	for _, body := range []string{`[]`, `{"data":[]}`, `{"data":{"bills":[]}}`} {
+		records, err := parseBillRecordsForSync([]byte(body))
+		if err != nil || len(records) != 0 {
+			t.Fatalf("recognized empty history %s = %#v, %v", body, records, err)
+		}
+	}
+	for _, body := range []string{`{}`, `{"unrelated":[]}`, `{"data":{"unexpected":[]}}`, `{"wrapper":{"items":[]}}`} {
+		records, err := parseBillRecordsForSync([]byte(body))
+		if !errors.Is(err, ErrProtocolChanged) || len(records) != 0 {
+			t.Fatalf("unknown empty shape %s accepted: %#v, %v", body, records, err)
+		}
+	}
+}
+
 func TestDownloadBillValidatesURLSizeAndPDF(t *testing.T) {
 	for _, tc := range []struct {
 		name, documentURL, pdf string

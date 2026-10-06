@@ -158,7 +158,7 @@ func safeBillDownloadCause(err error) error {
 		// errors are intentionally limited to the HTTP status.
 		return &ProtocolError{Status: protocol.Status}
 	}
-	for _, safe := range []error{ErrSessionExpired, ErrBillNotFound, ErrProtocolChanged} {
+	for _, safe := range []error{ErrSelectionRequired, ErrSessionExpired, ErrBillNotFound, ErrProtocolChanged} {
 		if errors.Is(err, safe) {
 			return safe
 		}
