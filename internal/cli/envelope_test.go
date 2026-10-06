@@ -73,6 +73,18 @@ func TestExecuteCLIEnvelopeInterceptsCobraFailures(t *testing.T) {
 	}
 }
 
+func TestEnvelopeUsageHistoryRejectsExtraArgumentsBeforeSessionAccess(t *testing.T) {
+	for _, command := range []string{"reads", "costs"} {
+		t.Run(command, func(t *testing.T) {
+			code, stdout, stderr := executeEnvelopeForTest(t, Dependencies{Store: securestore.NewMemoryStore()}, "", "--json-envelope", "usage", command, "extra-secret-canary")
+			got := decodeEnvelopeForTest(t, stdout)
+			if code != 2 || got["command"] != "usage."+command || got["error"].(map[string]any)["code"] != "invalid_argument" || stderr != "" || strings.Contains(stdout+stderr, "extra-secret-canary") {
+				t.Fatalf("extra argument was not rejected safely before session access: code=%d envelope=%#v stderr=%q", code, got, stderr)
+			}
+		})
+	}
+}
+
 func TestExecuteCLIEnvelopeMapsUnknownErrorWithoutLeaking(t *testing.T) {
 	const canary = "https://private.example/account?token=secret-canary"
 	deps := billsDependencies(t, envelopeListBills{err: errors.New(canary)})

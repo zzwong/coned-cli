@@ -125,7 +125,12 @@ func usageHistoryCommand(name string, costs bool, options *Options, deps Depende
 	if costs {
 		short += " and costs"
 	}
-	command := &cobra.Command{Use: name, Short: short, Args: func(_ *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: name, Short: short, Args: func(cmd *cobra.Command, args []string) error {
+		if options.Envelope {
+			if err := cobra.NoArgs(cmd, args); err != nil {
+				return err
+			}
+		}
 		aggregate = strings.ToLower(strings.TrimSpace(aggregate))
 		if !validReadFlags(aggregate, from, to) {
 			return invalidArgument(coned.ErrProtocolChanged)

@@ -37,6 +37,7 @@ func newGreenButtonCommand(options *Options, deps Dependencies) *cobra.Command {
 			short = "Download the original Green Button ZIP"
 		}
 		cmd := &cobra.Command{Use: use, Short: short, Args: func(c *cobra.Command, args []string) error {
+			format = strings.ToLower(format)
 			if err := cobra.NoArgs(c, args); err != nil {
 				return err
 			}
