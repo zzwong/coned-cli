@@ -19,13 +19,14 @@ import (
 
 // Options contains values shared by all commands.
 type Options struct {
-	Profile  string
-	JSON     bool
-	Envelope bool
-	Timeout  time.Duration
-	Demo     bool
-	Account  string
-	Meter    string
+	Profile    string
+	JSON       bool
+	Envelope   bool
+	Timeout    time.Duration
+	Demo       bool
+	Account    string
+	Meter      string
+	selections map[string]config.Selection
 }
 
 // Dependencies configure the command services and the profile/configuration
@@ -112,7 +113,7 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		deps.PasswordTerminal = auth.SystemPasswordTerminal{}
 	}
 
-	options := Options{Profile: settings.Profile, JSON: deps.Envelope, Envelope: deps.Envelope, Timeout: settings.RequestTimeout}
+	options := Options{Profile: settings.Profile, JSON: deps.Envelope, Envelope: deps.Envelope, Timeout: settings.RequestTimeout, selections: settings.Selections}
 	cmd := &cobra.Command{Use: "coned", Short: "Con Edison account command-line client", Args: cobra.NoArgs}
 	if deps.Envelope || deps.ExplainEnvelope {
 		cmd.Long = "Con Edison account command-line client. Add --json-envelope to request the versioned v1 JSON or authentication NDJSON contract."
@@ -126,8 +127,8 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		}
 		if options.Demo {
 			path := run.CommandPath()
-			if !strings.Contains(path, " entities ") && !strings.Contains(path, " diagnostics ") && !strings.Contains(path, " usage ") && !strings.Contains(path, " accounts ") {
-				return fmt.Errorf("demo mode supports only entities, diagnostics, accounts, and usage commands")
+			if path != "coned bills sync" && !strings.Contains(path, " entities ") && !strings.Contains(path, " diagnostics ") && !strings.Contains(path, " usage ") && !strings.Contains(path, " accounts ") {
+				return fmt.Errorf("demo mode supports only bills sync, entities, diagnostics, accounts, and usage commands")
 			}
 		}
 		return nil

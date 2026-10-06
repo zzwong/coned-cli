@@ -51,7 +51,10 @@ type Client struct {
 	// stateful cookie jar. It is held across requests, but never acquired by
 	// request/redirect helpers, preventing recursive-lock deadlocks.
 	operationMu sync.Mutex
-	debug       io.Writer
+	// syncScope pins the private billing scope selected by ListBillsForSync
+	// until its subsequent strict downloads complete.
+	syncScope billingMetadata
+	debug     io.Writer
 }
 
 // NewDefaultClient constructs the production client. Its construction cannot

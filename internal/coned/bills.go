@@ -23,6 +23,7 @@ const (
 	residentialBillHistoryPath = billHistoryPath + "/billing-types/billing-residential"
 	billInsertImagePath        = "/sitecore/api/ssc/ConEdWeb-Feature-Maui-Areas-MauiAPI/AccountPrograms/0/BillInsertImage"
 	maxBillPDFBytes            = 100 << 20
+	maxBillHistoryBodyBytes    = 4 << 20
 )
 
 // Bill is the safe, public representation of a bill. In particular it does
@@ -64,16 +65,65 @@ func (c *Client) ListBills(ctx context.Context, session auth.Session) ([]Bill, e
 	return bills, nil
 }
 
+// ListBillsForSync is the strict listing boundary used by repeatable local
+// synchronization. Unlike ListBills, it refuses to collapse distinct source
+// documents that share the same date-derived public ID or conflicting billing
+// scope metadata.
+func (c *Client) ListBillsForSync(ctx context.Context, session auth.Session) ([]Bill, error) {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
+
+	c.syncScope = nil
+	metadata, records, err := c.billRecordsForSync(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	c.syncScope = cloneBillingMetadata(metadata)
+	bills := make([]Bill, 0, len(records))
+	for _, record := range records {
+		bills = append(bills, record.Bill)
+	}
+	return bills, nil
+}
+
 // DownloadBill locates a public local bill ID in a freshly fetched history and
 // streams its PDF to dst. It never returns a signed document URL to callers.
 func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id string, dst io.Writer) error {
+	return c.downloadBill(ctx, session, id, dst, false)
+}
+
+// DownloadBillForSync repeats the strict scope and duplicate-document checks
+// immediately before resolving a document. A prior strict listing is not
+// treated as a durable scope guarantee.
+func (c *Client) DownloadBillForSync(ctx context.Context, session auth.Session, id string, dst io.Writer) error {
+	return c.downloadBill(ctx, session, id, dst, true)
+}
+
+func (c *Client) downloadBill(ctx context.Context, session auth.Session, id string, dst io.Writer, strict bool) error {
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
 
 	if dst == nil || !validPublicBillID(id) {
 		return ErrProtocolChanged
 	}
-	metadata, records, err := c.billRecords(ctx, session)
+	var metadata billingMetadata
+	var records []billRecord
+	var err error
+	if strict {
+		if c.syncScope == nil {
+			return billDownloadError(id, ErrSelectionRequired)
+		}
+		metadata, err = c.historyMetadataForSync(ctx, session)
+		if err != nil {
+			return billDownloadError(id, err)
+		}
+		if !sameBillingScope(c.syncScope, metadata) {
+			return billDownloadError(id, ErrSelectionRequired)
+		}
+		records, err = c.billRecordsFromMetadata(ctx, metadata, true)
+	} else {
+		metadata, records, err = c.billRecordsWithMode(ctx, session, false)
+	}
 	if err != nil {
 		return billDownloadError(id, err)
 	}
@@ -149,43 +199,104 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 }
 
 func (c *Client) billRecords(ctx context.Context, session auth.Session) (billingMetadata, []billRecord, error) {
-	metadata, err := c.historyMetadata(ctx, session)
+	return c.billRecordsWithMode(ctx, session, false)
+}
+
+func (c *Client) billRecordsForSync(ctx context.Context, session auth.Session) (billingMetadata, []billRecord, error) {
+	return c.billRecordsWithMode(ctx, session, true)
+}
+
+func (c *Client) billRecordsWithMode(ctx context.Context, session auth.Session, strict bool) (billingMetadata, []billRecord, error) {
+	var metadata billingMetadata
+	var err error
+	if strict {
+		metadata, err = c.historyMetadataForSync(ctx, session)
+	} else {
+		metadata, err = c.historyMetadata(ctx, session)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
+	records, err := c.billRecordsFromMetadata(ctx, metadata, strict)
+	if err != nil {
+		return nil, nil, err
+	}
+	return metadata, records, nil
+}
+
+func (c *Client) billRecordsFromMetadata(ctx context.Context, metadata billingMetadata, strict bool) ([]billRecord, error) {
 	data, err := json.Marshal(map[string]string{"AccountMaid": metadata["AccountMaid"], "ScId": metadata["ScId"]})
 	if err != nil {
-		return nil, nil, ErrProtocolChanged
+		return nil, ErrProtocolChanged
 	}
 	historyEndpoint := c.endpoint(residentialBillHistoryPath)
 	historyEndpoint.RawQuery = "asynchronous=1&bhistory=1"
 	response, err := c.request(ctx, stepBillHistory, http.MethodPost, historyEndpoint, bytes.NewReader(data), true)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBillHistoryBodyBytes+1))
 	if err != nil {
-		return nil, nil, c.transportFailure(ctx, stepBillHistory, err)
+		return nil, c.transportFailure(ctx, stepBillHistory, err)
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
-		return nil, nil, ErrSessionExpired
+		return nil, ErrSessionExpired
 	}
 	if response.StatusCode >= 500 && c.sessionRejected(ctx) {
-		return nil, nil, ErrSessionExpired
+		return nil, ErrSessionExpired
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, nil, protocolError(response)
+		return nil, protocolError(response)
 	}
-	records, err := parseBillRecords(body)
+	if strict && len(body) > maxBillHistoryBodyBytes {
+		return nil, ErrProtocolChanged
+	}
+	var records []billRecord
+	if strict {
+		records, err = parseBillRecordsForSync(body)
+	} else {
+		records, err = parseBillRecords(body)
+	}
 	if err != nil {
-		return nil, nil, ErrProtocolChanged
+		if strict && errors.Is(err, ErrSelectionRequired) {
+			return nil, ErrSelectionRequired
+		}
+		return nil, ErrProtocolChanged
 	}
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Date > records[j].Date })
-	return metadata, records, nil
+	return records, nil
+}
+
+func cloneBillingMetadata(metadata billingMetadata) billingMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copy := make(billingMetadata, len(metadata))
+	for key, value := range metadata {
+		copy[key] = value
+	}
+	return copy
+}
+
+func sameBillingScope(a, b billingMetadata) bool {
+	for _, key := range []string{"AccountMaid", "ScId", "AccountId"} {
+		if a[key] != b[key] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) historyMetadata(ctx context.Context, session auth.Session) (billingMetadata, error) {
+	return c.historyMetadataWithMode(ctx, session, false)
+}
+
+func (c *Client) historyMetadataForSync(ctx context.Context, session auth.Session) (billingMetadata, error) {
+	return c.historyMetadataWithMode(ctx, session, true)
+}
+
+func (c *Client) historyMetadataWithMode(ctx context.Context, session auth.Session, strict bool) (billingMetadata, error) {
 	if session.State(time.Now()) != auth.SessionValid || c.restoreSession(session) != nil {
 		return nil, ErrSessionExpired
 	}
@@ -194,7 +305,7 @@ func (c *Client) historyMetadata(ctx context.Context, session auth.Session) (bil
 		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBillHistoryBodyBytes+1))
 	if err != nil {
 		return nil, c.transportFailure(ctx, stepBillHistory, err)
 	}
@@ -204,7 +315,16 @@ func (c *Client) historyMetadata(ctx context.Context, session auth.Session) (bil
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, protocolError(response)
 	}
+	if strict && len(body) > maxBillHistoryBodyBytes {
+		return nil, ErrProtocolChanged
+	}
 	metadata := parseBillingMetadata(string(body))
+	if strict {
+		metadata, err = parseBillingMetadataForSync(string(body))
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(metadata) == 0 {
 		return nil, ErrProtocolChanged
 	}
@@ -251,6 +371,58 @@ func parseBillingMetadata(page string) billingMetadata {
 	return out
 }
 
+func parseBillingMetadataForSync(page string) (billingMetadata, error) {
+	values := map[string]map[string]struct{}{
+		"AccountMaid": {},
+		"ScId":        {},
+		"AccountId":   {},
+	}
+	add := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		switch normalizeBillKey(key) {
+		case "accountmaid", "maid":
+			values["AccountMaid"][value] = struct{}{}
+		case "scid", "sitecoreid":
+			values["ScId"][value] = struct{}{}
+		case "accountid":
+			values["AccountId"][value] = struct{}{}
+		}
+	}
+	for _, tag := range htmlTag.FindAllString(page, -1) {
+		attributes, err := strictBillHTMLAttributes(tag)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range attributes {
+			if strings.HasPrefix(key, "data-") {
+				add(strings.TrimPrefix(key, "data-"), value)
+			}
+		}
+		if name, ok := attributes["name"]; ok {
+			add(name, attributes["value"])
+		}
+	}
+	for _, pair := range metadataJSON.FindAllStringSubmatch(page, -1) {
+		add(pair[1], pair[2])
+	}
+	metadata := billingMetadata{}
+	for key, found := range values {
+		if len(found) > 1 {
+			return nil, ErrSelectionRequired
+		}
+		for value := range found {
+			metadata[key] = value
+		}
+	}
+	if metadata["AccountMaid"] == "" || metadata["ScId"] == "" {
+		return nil, ErrSelectionRequired
+	}
+	return metadata, nil
+}
+
 func parseBillRecords(data []byte) ([]billRecord, error) {
 	var records []billRecord
 	var root any
@@ -274,6 +446,261 @@ func parseBillRecords(data []byte) ([]billRecord, error) {
 		}
 	}
 	return out, nil
+}
+
+func parseBillRecordsForSync(data []byte) ([]billRecord, error) {
+	var records []billRecord
+	root, isJSON, err := decodeBillSyncJSON(data)
+	if err != nil {
+		return nil, ErrProtocolChanged
+	}
+	if isJSON {
+		if err := walkBillJSONForSync(root, &records); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, tag := range htmlTag.FindAllString(string(data), -1) {
+			attributes, err := strictBillHTMLAttributes(tag)
+			if err != nil {
+				return nil, err
+			}
+			values := map[string]string{}
+			for key, value := range attributes {
+				normalized := normalizeBillKey(strings.TrimPrefix(key, "data-"))
+				if previous, exists := values[normalized]; exists && previous != value {
+					return nil, ErrSelectionRequired
+				}
+				values[normalized] = value
+			}
+			documentID, err := uniqueBillValue(values, "documentid", "billdocumentid")
+			if err != nil {
+				return nil, err
+			}
+			if documentID == "" {
+				continue
+			}
+			dateValue, err := uniqueBillValue(values, "billdate", "statementdate", "date", "issuedate")
+			if err != nil {
+				return nil, err
+			}
+			date, ok := normalizeBillDate(dateValue)
+			if !ok {
+				return nil, ErrProtocolChanged
+			}
+			cycle, err := uniqueBillValue(values, "billcycle", "cycle", "billingcycle", "cycledate")
+			if err != nil {
+				return nil, err
+			}
+			documentType, err := uniqueBillValue(values, "type", "documenttype", "doctype")
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, billRecord{Bill: Bill{ID: localBillID(date), Date: date, Cycle: cycle, DocumentType: documentType}, documentID: documentID})
+		}
+	}
+	if len(records) == 0 {
+		if recognizedEmptyBillCollection(root) {
+			return []billRecord{}, nil
+		}
+		return nil, ErrProtocolChanged
+	}
+	byID := make(map[string]billRecord, len(records))
+	ordered := make([]billRecord, 0, len(records))
+	for _, record := range records {
+		date, ok := BillIDDate(record.ID)
+		if !ok || date != record.Date || record.documentID == "" {
+			return nil, ErrProtocolChanged
+		}
+		if previous, ok := byID[record.ID]; ok {
+			if previous.documentID != record.documentID || previous.Cycle != record.Cycle || previous.DocumentType != record.DocumentType {
+				return nil, ErrSelectionRequired
+			}
+			continue
+		}
+		byID[record.ID] = record
+		ordered = append(ordered, record)
+	}
+	return ordered, nil
+}
+
+func recognizedEmptyBillCollection(value any) bool {
+	switch node := value.(type) {
+	case []any:
+		return len(node) == 0
+	case map[string]any:
+		if emptyBillArrayAt(node, "bills", "billhistory", "billinghistory", "results", "items") {
+			return true
+		}
+		data, ok := billJSONField(node, "data")
+		if !ok {
+			return false
+		}
+		if rows, ok := data.([]any); ok {
+			return len(rows) == 0
+		}
+		if nested, ok := data.(map[string]any); ok {
+			return emptyBillArrayAt(nested, "bills", "billhistory", "billinghistory", "results", "items")
+		}
+	}
+	return false
+}
+
+func emptyBillArrayAt(object map[string]any, names ...string) bool {
+	for key, value := range object {
+		for _, name := range names {
+			if normalizeBillKey(key) != name {
+				continue
+			}
+			if rows, ok := value.([]any); ok && len(rows) == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func billJSONField(object map[string]any, name string) (any, bool) {
+	for key, value := range object {
+		if normalizeBillKey(key) == name {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func strictBillHTMLAttributes(tag string) (map[string]string, error) {
+	attributes := make(map[string]string)
+	for _, pair := range htmlAttribute.FindAllStringSubmatch(tag, -1) {
+		key := strings.ToLower(pair[1])
+		value := strings.TrimSpace(pair[2])
+		if previous, exists := attributes[key]; exists && previous != value {
+			return nil, ErrSelectionRequired
+		}
+		attributes[key] = value
+	}
+	return attributes, nil
+}
+
+func decodeBillSyncJSON(data []byte) (any, bool, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' && trimmed[0] != '[' {
+		return nil, false, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	root, err := decodeBillSyncJSONValue(decoder)
+	if err != nil {
+		return nil, true, err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, true, ErrProtocolChanged
+	}
+	return root, true, nil
+}
+
+func decodeBillSyncJSONValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+	switch delimiter {
+	case '{':
+		object := make(map[string]any)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, ErrProtocolChanged
+			}
+			if _, duplicate := object[key]; duplicate {
+				return nil, ErrProtocolChanged
+			}
+			value, err := decodeBillSyncJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = value
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return nil, ErrProtocolChanged
+		}
+		return object, nil
+	case '[':
+		var array []any
+		for decoder.More() {
+			value, err := decodeBillSyncJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, value)
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim(']') {
+			return nil, ErrProtocolChanged
+		}
+		return array, nil
+	default:
+		return nil, ErrProtocolChanged
+	}
+}
+
+func walkBillJSONForSync(value any, records *[]billRecord) error {
+	switch node := value.(type) {
+	case []any:
+		for _, child := range node {
+			if err := walkBillJSONForSync(child, records); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		values := map[string]string{}
+		for key, child := range node {
+			if text, ok := child.(string); ok {
+				normalized := normalizeBillKey(key)
+				text = strings.TrimSpace(text)
+				if previous, exists := values[normalized]; exists && previous != text {
+					return ErrSelectionRequired
+				}
+				values[normalized] = text
+			}
+		}
+		documentID, err := uniqueBillValue(values, "documentid", "billdocumentid", "documentidentifier")
+		if err != nil {
+			return err
+		}
+		if documentID != "" {
+			dateValue, err := uniqueBillValue(values, "billdate", "statementdate", "date", "issuedate")
+			if err != nil {
+				return err
+			}
+			date, ok := normalizeBillDate(dateValue)
+			if !ok {
+				return ErrProtocolChanged
+			}
+			cycle, err := uniqueBillValue(values, "cycle", "billingcycle", "cycledate")
+			if err != nil {
+				return err
+			}
+			typ, err := uniqueBillValue(values, "documenttype", "doctype", "type")
+			if err != nil {
+				return err
+			}
+			*records = append(*records, billRecord{Bill: Bill{ID: localBillID(date), Date: date, Cycle: cycle, DocumentType: typ}, documentID: documentID})
+		}
+		for _, child := range node {
+			if err := walkBillJSONForSync(child, records); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func parseBillHTML(page string) []billRecord {
@@ -325,6 +752,21 @@ func firstValue(values map[string]string, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func uniqueBillValue(values map[string]string, keys ...string) (string, error) {
+	var found string
+	for _, key := range keys {
+		value := strings.TrimSpace(values[key])
+		if value == "" {
+			continue
+		}
+		if found != "" && found != value {
+			return "", ErrSelectionRequired
+		}
+		found = value
+	}
+	return found, nil
 }
 func normalizeBillDate(value string) (string, bool) {
 	for _, layout := range []string{"2006-01-02", "01/02/2006", "1/2/2006", "Jan 2, 2006", "January 2, 2006", time.RFC3339} {

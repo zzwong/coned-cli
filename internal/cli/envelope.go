@@ -25,16 +25,29 @@ var envelopeErrorCodes = []string{
 	"invalid_argument", "selection_required", "session_expired", "mfa_required",
 	"invalid_credentials", "storage_locked", "storage_access_denied", "storage_failed",
 	"transport_failed", "timeout", "canceled", "provider_protocol_changed", "bill_not_found",
-	"output_conflict", "output_failed", "internal_error",
+	"output_conflict", "output_failed", "unsupported_platform", "internal_error",
 }
 
 var envelopeCommandIDs = []string{
 	"accounts", "accounts.list", "auth", "auth.import-browser", "auth.init", "auth.login", "auth.logout", "auth.status",
-	"bills", "bills.download", "bills.list", "capabilities", "completion", "completion.bash", "completion.fish",
+	"bills", "bills.download", "bills.list", "bills.sync", "capabilities", "completion", "completion.bash", "completion.fish",
 	"completion.powershell", "completion.zsh", "coned", "diagnostics", "diagnostics.inspect", "diagnostics.schema",
 	"entities", "entities.alias", "entities.list", "entities.select", "green-button", "green-button.download", "green-button.export",
 	"green-button.inspect", "help", "usage", "usage.bills", "usage.costs", "usage.export", "usage.forecast",
 	"usage.meters", "usage.neighbors", "usage.reads", "usage.realtime", "usage.summary", "usage.weather", "version",
+}
+
+func availableEnvelopeCommandIDs() []string {
+	if billSyncPlatformSupported() {
+		return append([]string(nil), envelopeCommandIDs...)
+	}
+	commands := make([]string, 0, len(envelopeCommandIDs)-1)
+	for _, command := range envelopeCommandIDs {
+		if command != "bills.sync" {
+			commands = append(commands, command)
+		}
+	}
+	return commands
 }
 
 // Dependencies keeps optional implementation details out of the exported
@@ -60,7 +73,7 @@ type errorClass struct {
 func (e *errorClass) Error() string { return e.legacy.Error() }
 func (e *errorClass) Unwrap() error { return e.legacy }
 func (e *errorClass) Is(target error) bool {
-	if target == ErrInvalidArgument && e.code == "invalid_argument" || target == ErrOutputConflict && e.code == "output_conflict" || target == ErrOutputFailed && e.code == "output_failed" {
+	if target == ErrInvalidArgument && e.code == "invalid_argument" || target == ErrOutputConflict && e.code == "output_conflict" || target == ErrOutputFailed && e.code == "output_failed" || target == ErrUnsupportedPlatform && e.code == "unsupported_platform" {
 		return true
 	}
 	return errors.Is(e.legacy, target)
@@ -71,6 +84,7 @@ func (e *errorClass) Is(target error) bool {
 var ErrInvalidArgument = errors.New("invalid argument")
 var ErrOutputConflict = errors.New("output already exists or conflicts")
 var ErrOutputFailed = errors.New("output could not be written")
+var ErrUnsupportedPlatform = errors.New("operation is not supported on this platform")
 
 func invalidArgument(legacy error) error {
 	if legacy == nil {
@@ -85,6 +99,10 @@ func outputConflictError() error {
 
 func outputFailedError() error {
 	return &errorClass{legacy: coned.ErrProtocolChanged, code: "output_failed"}
+}
+
+func unsupportedPlatformError() error {
+	return &errorClass{legacy: ErrUnsupportedPlatform, code: "unsupported_platform"}
 }
 
 func internalBoundary(legacy error) error {
@@ -124,8 +142,10 @@ type authStreamEvent struct {
 }
 
 type mappedError struct {
-	value envelopeError
-	arg   bool
+	value   envelopeError
+	arg     bool
+	data    any
+	hasData bool
 }
 
 // ExecuteCLI is the production entry point. NewRootCommand.Execute remains a
@@ -322,7 +342,7 @@ func newOfflineCapabilitiesCommand(stdin io.Reader, stdout, stderr io.Writer) *c
 	capabilities := &cobra.Command{Use: "capabilities", Short: "Describe supported automation contracts", Long: "Add --json-envelope to return the capabilities document inside the v1 envelope.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return writeJSON(cmd.OutOrStdout(), map[string]any{
 			"schema_versions": []int{envelopeSchemaVersion},
-			"commands":        envelopeCommandIDs,
+			"commands":        availableEnvelopeCommandIDs(),
 			"error_codes":     envelopeErrorCodes,
 		})
 	}}
@@ -358,7 +378,7 @@ func newCapabilitiesCommand() *cobra.Command {
 	return &cobra.Command{Use: "capabilities", Short: "Describe supported automation contracts", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return writeJSON(cmd.OutOrStdout(), map[string]any{
 			"schema_versions": []int{envelopeSchemaVersion},
-			"commands":        envelopeCommandIDs,
+			"commands":        availableEnvelopeCommandIDs(),
 			"error_codes":     envelopeErrorCodes,
 		})
 	}}
@@ -461,6 +481,13 @@ func helpRequested(args []string) bool {
 }
 
 func mapEnvelopeError(err error, argument bool) mappedError {
+	var partial *billSyncFailure
+	if errors.As(err, &partial) && partial != nil {
+		mapped := mapEnvelopeError(partial.cause, argument)
+		mapped.data = partial.manifest
+		mapped.hasData = true
+		return mapped
+	}
 	var classified *errorClass
 	if errors.As(err, &classified) && classified != nil {
 		return mappedError{value: envelopeError{Code: classified.code}, arg: classified.code == "invalid_argument"}
@@ -530,6 +557,9 @@ func writeEnvelopeSuccess(w io.Writer, command string, data any, deps Dependenci
 
 func writeEnvelopeFailure(w io.Writer, command string, mapped mappedError, deps Dependencies) int {
 	result := oneShotEnvelope{SchemaVersion: envelopeSchemaVersion, Command: command, OK: false, CapturedAt: envelopeNow(deps), Error: &mapped.value}
+	if mapped.hasData {
+		result.Data = mapped.data
+	}
 	status := 1
 	if mapped.arg {
 		status = 2
