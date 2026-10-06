@@ -104,7 +104,11 @@ func TestBillSyncLatestOnlyUsesStrictServiceAndVerifiedManifest(t *testing.T) {
 	}
 	data := syncData(t, got)
 	results := data["results"].([]any)
-	if data["since"] != nil || data["directory"] != directory || data["downloaded"] != float64(1) || len(results) != 1 {
+	expectedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data["since"] != nil || data["directory"] != expectedDirectory || data["downloaded"] != float64(1) || len(results) != 1 {
 		t.Fatalf("manifest = %#v", data)
 	}
 	result := results[0].(map[string]any)
@@ -365,6 +369,50 @@ func TestBillSyncDirectorySymlinkRejectedBeforeProviderAccess(t *testing.T) {
 	got := decodeEnvelopeForTest(t, stdout)
 	if code != 2 || got["error"].(map[string]any)["code"] != "invalid_argument" || len(service.downloads) != 0 || stderr != "" {
 		t.Fatalf("directory symlink accepted: code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+}
+
+func TestBillSyncManifestUsesCanonicalPathThroughAncestorSymlink(t *testing.T) {
+	parent := t.TempDir()
+	realParent := filepath.Join(parent, "real-parent")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realDirectory := filepath.Join(realParent, "bills")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasedParent := filepath.Join(parent, "parent-alias")
+	if err := os.Symlink(realParent, aliasedParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	directory := filepath.Join(aliasedParent, "bills")
+	finalInfo, err := os.Lstat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalInfo.Mode()&os.ModeSymlink != 0 || !finalInfo.IsDir() {
+		t.Fatalf("final directory component is not a real directory: mode=%v", finalInfo.Mode())
+	}
+
+	id := publicBillID("2026-07-02")
+	service := &syncBillsFixture{items: []coned.Bill{{ID: id, Date: "2026-07-02"}}}
+	code, stdout, stderr := executeEnvelopeForTest(t, syncTestDependencies(t, service), "", "--json-envelope", "bills", "sync", "--directory", directory)
+	got := decodeEnvelopeForTest(t, stdout)
+	if code != 0 || got["ok"] != true || stderr != "" {
+		t.Fatalf("ancestor-symlink sync: code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+	expectedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := syncData(t, got)
+	if data["directory"] != expectedDirectory || expectedDirectory == directory {
+		t.Fatalf("manifest directory=%v, want canonical path %q from %q", data["directory"], expectedDirectory, directory)
+	}
+	filename := data["results"].([]any)[0].(map[string]any)["filename"].(string)
+	if _, err := os.Stat(filepath.Join(realDirectory, filename)); err != nil {
+		t.Fatalf("bill was not published beneath the resolved directory: %v", err)
 	}
 }
 
