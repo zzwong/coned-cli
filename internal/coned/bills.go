@@ -103,15 +103,19 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 	query.Set("BillDate", record.Date)
 	query.Set("Type", "image")
 	documentEndpoint.RawQuery = query.Encode()
-	response, err := c.request(ctx, http.MethodGet, documentEndpoint, nil, false)
+	response, err := c.request(ctx, stepBillDocument, http.MethodGet, documentEndpoint, nil, false)
 	if err != nil {
-		return billDownloadError(id, transportError(ctx))
+		return billDownloadError(id, err)
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	closeErr := response.Body.Close()
 	if readErr != nil || closeErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		if readErr != nil || closeErr != nil {
-			return billDownloadError(id, ErrProtocolChanged)
+			cause := readErr
+			if cause == nil {
+				cause = closeErr
+			}
+			return billDownloadError(id, c.transportFailure(ctx, stepBillDocument, cause))
 		}
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
 			return billDownloadError(id, ErrSessionExpired)
@@ -125,9 +129,9 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 	if err != nil {
 		return billDownloadError(id, err)
 	}
-	pdf, err := c.request(ctx, http.MethodGet, documentURL, nil, false)
+	pdf, err := c.request(ctx, stepPDFDownload, http.MethodGet, documentURL, nil, false)
 	if err != nil {
-		return billDownloadError(id, transportError(ctx))
+		return billDownloadError(id, err)
 	}
 	defer func() { _ = pdf.Body.Close() }()
 	if pdf.StatusCode < 200 || pdf.StatusCode >= 300 {
@@ -136,7 +140,12 @@ func (c *Client) DownloadBill(ctx context.Context, session auth.Session, id stri
 		}
 		return billDownloadError(id, protocolError(pdf))
 	}
-	return billDownloadError(id, copyPDF(dst, pdf.Body))
+	trackedBody := &transportReadTracker{reader: pdf.Body}
+	copyErr := copyPDF(dst, trackedBody)
+	if trackedBody.err != nil {
+		return billDownloadError(id, c.transportFailure(ctx, stepPDFDownload, trackedBody.err))
+	}
+	return billDownloadError(id, copyErr)
 }
 
 func (c *Client) billRecords(ctx context.Context, session auth.Session) (billingMetadata, []billRecord, error) {
@@ -150,14 +159,14 @@ func (c *Client) billRecords(ctx context.Context, session auth.Session) (billing
 	}
 	historyEndpoint := c.endpoint(residentialBillHistoryPath)
 	historyEndpoint.RawQuery = "asynchronous=1&bhistory=1"
-	response, err := c.request(ctx, http.MethodPost, historyEndpoint, bytes.NewReader(data), true)
+	response, err := c.request(ctx, stepBillHistory, http.MethodPost, historyEndpoint, bytes.NewReader(data), true)
 	if err != nil {
-		return nil, nil, transportError(ctx)
+		return nil, nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		return nil, nil, ErrProtocolChanged
+		return nil, nil, c.transportFailure(ctx, stepBillHistory, err)
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
 		return nil, nil, ErrSessionExpired
@@ -180,14 +189,14 @@ func (c *Client) historyMetadata(ctx context.Context, session auth.Session) (bil
 	if session.State(time.Now()) != auth.SessionValid || c.restoreSession(session) != nil {
 		return nil, ErrSessionExpired
 	}
-	response, err := c.request(ctx, http.MethodGet, c.endpoint(billHistoryPath), nil, false)
+	response, err := c.request(ctx, stepBillHistory, http.MethodGet, c.endpoint(billHistoryPath), nil, false)
 	if err != nil {
-		return nil, transportError(ctx)
+		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		return nil, ErrProtocolChanged
+		return nil, c.transportFailure(ctx, stepBillHistory, err)
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || (response.StatusCode >= 300 && response.StatusCode < 400 && strings.Contains(strings.ToLower(response.Header.Get("Location")), "/login")) {
 		return nil, ErrSessionExpired

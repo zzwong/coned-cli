@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,7 +106,7 @@ func TestGreenButtonValidationAndSafeErrors(t *testing.T) {
 		}
 	}
 	fake, deps := greenButtonDeps(t)
-	fake.err = errors.New("private detail: " + coned.ErrGreenButtonUnavailable.Error())
+	fake.err = fmt.Errorf("private detail: %w", coned.ErrGreenButtonUnavailable)
 	if _, err := runWithDependencies(t, deps, "", "green-button inspect"); !errors.Is(err, coned.ErrGreenButtonUnavailable) {
 		t.Fatalf("error=%v", err)
 	}

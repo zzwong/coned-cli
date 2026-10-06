@@ -45,20 +45,20 @@ func (c *Client) Authenticate(ctx context.Context, credentials auth.Credentials)
 	// Match the browser flow: clear any stale Okta session before starting a
 	// credential exchange. The site treats 404 as an already-cleared session.
 	resetURL, _ := url.Parse("https://coned.okta.com/api/v1/sessions/me")
-	if reset, resetErr := c.request(ctx, http.MethodDelete, resetURL, nil, false); resetErr == nil {
+	if reset, resetErr := c.request(ctx, stepOktaReset, http.MethodDelete, resetURL, nil, false); resetErr == nil {
 		c.debugf("auth Okta reset response status=%d", reset.StatusCode)
 		_ = reset.Body.Close()
 	}
 	c.debugf("auth login request started")
-	response, err := c.request(ctx, http.MethodPost, c.endpoint(loginPath), bytes.NewReader(data), true)
+	response, err := c.request(ctx, stepLogin, http.MethodPost, c.endpoint(loginPath), bytes.NewReader(data), true)
 	if err != nil {
-		return auth.Session{}, transportError(ctx)
+		return auth.Session{}, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth login response status=%d", response.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return auth.Session{}, ErrProtocolChanged
+		return auth.Session{}, c.transportFailure(ctx, stepLogin, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return auth.Session{}, classifyResponse(response, body)
@@ -81,7 +81,7 @@ func (c *Client) Authenticate(ctx context.Context, credentials auth.Credentials)
 		c.jar.mu.Lock()
 		for _, cookie := range c.jar.cookies {
 			if allowedAuthCookie(cookie.Name) {
-				c.debugf("auth cookie observed name=%s domain=%s", cookie.Name, cookie.Domain)
+				c.debugf("auth cookie observed name=%s", cookie.Name)
 			}
 		}
 		c.jar.mu.Unlock()
@@ -95,10 +95,10 @@ func (c *Client) Authenticate(ctx context.Context, credentials auth.Credentials)
 	return session, nil
 }
 
-func (c *Client) request(ctx context.Context, method string, u *url.URL, body io.Reader, jsonRequest bool) (*http.Response, error) {
+func (c *Client) request(ctx context.Context, step transportStep, method string, u *url.URL, body io.Reader, jsonRequest bool) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
-		return nil, err
+		return nil, c.transportFailure(ctx, step, err)
 	}
 	request.Header.Set("User-Agent", c.userAgent())
 	request.Header.Set("Accept", "application/json")
@@ -123,18 +123,15 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body io
 		request.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 	if c.debug != nil {
-		names := make([]string, 0, len(c.jar.Cookies(u)))
-		for _, cookie := range c.jar.Cookies(u) {
-			names = append(names, cookie.Name)
-		}
-		c.debugf("http request method=%s host=%s path=%s cookies=%s", method, u.Hostname(), u.Path, strings.Join(names, ","))
+		c.debugf("http request step=%s method=%s cookies_present=%t", safeTransportStep(step), method, len(c.jar.Cookies(u)) > 0)
 	}
 	response, err := c.httpClient.Do(request)
-	if err == nil {
-		c.debugf("http response status=%d host=%s path=%s", response.StatusCode, u.Hostname(), u.Path)
-		if location, parseErr := url.Parse(response.Header.Get("Location")); parseErr == nil && response.Header.Get("Location") != "" {
-			c.debugf("http redirect host=%s path=%s", location.Hostname(), location.Path)
-		}
+	if err != nil {
+		return nil, c.transportFailure(ctx, step, err)
+	}
+	c.debugf("http response step=%s status=%d method=%s", safeTransportStep(step), response.StatusCode, method)
+	if response.Header.Get("Location") != "" {
+		c.debugf("http redirect received")
 	}
 	return response, err
 }
@@ -159,13 +156,15 @@ func (c *Client) ResendMFA(ctx context.Context) error {
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
 	c.debugf("auth MFA resend request started")
-	response, err := c.request(ctx, http.MethodPost, c.endpoint(resendMFAPath), strings.NewReader("{}"), true)
+	response, err := c.request(ctx, stepMFAResend, http.MethodPost, c.endpoint(resendMFAPath), strings.NewReader("{}"), true)
 	if err != nil {
-		return transportError(ctx)
+		return err
 	}
 	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth MFA resend response status=%d", response.StatusCode)
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20)); err != nil {
+		return c.transportFailure(ctx, stepMFAResend, err)
+	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return nil
 	}
@@ -194,15 +193,15 @@ func (c *Client) VerifyMFA(ctx context.Context, code string) (auth.Session, erro
 		return auth.Session{}, ErrProtocolChanged
 	}
 	c.debugf("auth MFA verification request started")
-	response, err := c.request(ctx, http.MethodPost, c.endpoint(verifyMFAPath), bytes.NewReader(data), true)
+	response, err := c.request(ctx, stepMFAVerify, http.MethodPost, c.endpoint(verifyMFAPath), bytes.NewReader(data), true)
 	if err != nil {
-		return auth.Session{}, transportError(ctx)
+		return auth.Session{}, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth MFA verification response status=%d", response.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return auth.Session{}, ErrProtocolChanged
+		return auth.Session{}, c.transportFailure(ctx, stepMFAVerify, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return auth.Session{}, classifyResponse(response, body)
@@ -245,13 +244,6 @@ func hasAuthenticatedCookie(session auth.Session) bool {
 		}
 	}
 	return false
-}
-
-func transportError(ctx context.Context) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return ErrProtocolChanged
 }
 
 func (c *Client) parseAuthorizeURL(response *http.Response, body []byte) (*url.URL, error) {
@@ -360,19 +352,15 @@ func (c *Client) follow(ctx context.Context, next *url.URL) error {
 			return ErrProtocolChanged
 		}
 		requestCookies := c.jar.Cookies(next)
-		cookieNames := make([]string, 0, len(requestCookies))
-		for _, cookie := range requestCookies {
-			cookieNames = append(cookieNames, cookie.Name)
-		}
-		c.debugf("auth redirect request host=%s path=%s cookies=%s", next.Hostname(), next.Path, strings.Join(cookieNames, ","))
-		response, err := c.request(ctx, http.MethodGet, next, nil, false)
+		c.debugf("auth redirect request cookies_present=%t", len(requestCookies) > 0)
+		response, err := c.request(ctx, stepRedirect, http.MethodGet, next, nil, false)
 		if err != nil {
-			return transportError(ctx)
+			return err
 		}
 		_ = response.Body.Close()
 		c.debugf("auth redirect response status=%d", response.StatusCode)
 		for _, cookie := range response.Cookies() {
-			c.debugf("auth redirect set-cookie name=%s domain=%s path=%s value_len=%d max_age=%d expires_set=%t expires_future=%t", cookie.Name, strings.TrimPrefix(cookie.Domain, "."), cookie.Path, len(cookie.Value), cookie.MaxAge, !cookie.Expires.IsZero(), cookie.Expires.After(time.Now()))
+			c.debugf("auth redirect set-cookie recognized=%t", allowedAuthCookie(cookie.Name))
 		}
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			return nil
@@ -400,9 +388,9 @@ func (c *Client) ValidateAuthenticatedSession(ctx context.Context, session auth.
 }
 
 func (c *Client) confirm(ctx context.Context) error {
-	response, err := c.request(ctx, http.MethodGet, c.endpoint(accountPath), nil, false)
+	response, err := c.request(ctx, stepSessionCheck, http.MethodGet, c.endpoint(accountPath), nil, false)
 	if err != nil {
-		return transportError(ctx)
+		return err
 	}
 	defer func() { _ = response.Body.Close() }()
 	c.debugf("auth confirmation response status=%d", response.StatusCode)

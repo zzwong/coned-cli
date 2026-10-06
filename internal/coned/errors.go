@@ -2,8 +2,10 @@
 package coned
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"unicode"
@@ -15,8 +17,82 @@ var (
 	ErrChallengeRequired  = errors.New("coned: authentication challenge required")
 	ErrSessionExpired     = errors.New("coned: session expired; run `coned auth login`")
 	ErrProtocolChanged    = errors.New("coned: login protocol changed")
+	ErrTransport          = errors.New("coned: request to Con Edison failed")
 	ErrBillNotFound       = errors.New("coned: bill not found")
 )
+
+// TransportKind is the safe, allowlisted category of a failed HTTP request.
+type TransportKind string
+
+const (
+	TransportTimeout    TransportKind = "timeout"
+	TransportDNS        TransportKind = "dns"
+	TransportTLS        TransportKind = "tls"
+	TransportConnection TransportKind = "connection"
+	TransportUnknown    TransportKind = "unknown"
+)
+
+// TransportError classifies a request failure without rendering its underlying
+// cause. Kind and Retryable are safe for human and machine-readable output.
+// The cause is kept only so errors.Is can recognize context cancellation and
+// deadline errors; Error never formats it.
+type TransportError struct {
+	Kind      TransportKind
+	Retryable bool
+	cause     error
+}
+
+func (e *TransportError) Error() string {
+	kind := e.Kind
+	if !validTransportKind(kind) {
+		kind = TransportUnknown
+	}
+	return fmt.Sprintf("%s (%s)", ErrTransport, kind)
+}
+
+// Is lets callers recognize any classified request failure by its sentinel.
+func (e *TransportError) Is(target error) bool { return target == ErrTransport }
+
+// Unwrap preserves safe cause inspection, including errors.Is for context
+// deadline errors, while Error remains independent of the cause text.
+func (e *TransportError) Unwrap() error { return e.cause }
+
+// AsSafeTransportError returns a detached, allowlisted transport error. It
+// discards arbitrary wrappers while retaining the private cause for errors.Is.
+func AsSafeTransportError(err error) (*TransportError, bool) {
+	var transport *TransportError
+	if !errors.As(err, &transport) || transport == nil || !validTransportKind(transport.Kind) {
+		return nil, false
+	}
+	return &TransportError{Kind: transport.Kind, Retryable: transportRetryable(transport.Kind, transport.cause), cause: transport.cause}, true
+}
+
+func validTransportKind(kind TransportKind) bool {
+	switch kind {
+	case TransportTimeout, TransportDNS, TransportTLS, TransportConnection, TransportUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func transportRetryable(kind TransportKind, cause error) bool {
+	switch kind {
+	case TransportTimeout:
+		if errors.Is(cause, context.DeadlineExceeded) {
+			return true
+		}
+		var networkErr net.Error
+		return errors.As(cause, &networkErr) && networkErr.Timeout()
+	case TransportDNS:
+		var dnsErr *net.DNSError
+		return errors.As(cause, &dnsErr) && (dnsErr.IsTimeout || dnsErr.IsTemporary)
+	case TransportConnection:
+		return isConnectionError(cause)
+	default:
+		return false
+	}
+}
 
 // ProtocolError is deliberately limited to metadata that is safe to report.
 // It never includes a response body, URL query, cookie, or credential.
@@ -73,6 +149,9 @@ func safeBillDownloadCause(err error) error {
 			clean.Host = document.Host
 		}
 		return clean
+	}
+	if transport, ok := AsSafeTransportError(err); ok {
+		return transport
 	}
 	if protocol, ok := AsSafeProtocolError(err); ok {
 		// Request IDs are useful for authentication diagnostics, but bill

@@ -66,14 +66,14 @@ func opowerToken(session auth.Session) (string, error) {
 }
 
 func (c *Client) mintOpowerToken(ctx context.Context) (string, error) {
-	response, err := c.request(ctx, http.MethodGet, c.endpoint("/sitecore/api/ssc/ConEd-Cms-Services-Controllers-Opower/OpowerService/0/GetOPowerToken"), nil, false)
+	response, err := c.request(ctx, stepUsage, http.MethodGet, c.endpoint("/sitecore/api/ssc/ConEd-Cms-Services-Controllers-Opower/OpowerService/0/GetOPowerToken"), nil, false)
 	if err != nil {
-		return "", transportError(ctx)
+		return "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return "", ErrProtocolChanged
+		return "", c.transportFailure(ctx, stepUsage, err)
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || isLoginRedirect(response) {
 		return "", ErrSessionExpired
@@ -125,12 +125,12 @@ func (c *Client) opower(ctx context.Context, session auth.Session, operation, qu
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return transportError(ctx)
+		return c.transportFailure(ctx, stepUsage, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return ErrProtocolChanged
+		return c.transportFailure(ctx, stepUsage, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return ErrSessionExpired
