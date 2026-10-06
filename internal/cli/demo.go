@@ -32,13 +32,13 @@ func (demoOpower) FetchSelected(ctx context.Context, s auth.Session, r string, _
 	return demoOpower{}.Fetch(ctx, s, r)
 }
 func (demoOpower) Forecast(context.Context, auth.Session) ([]coned.Forecast, error) {
-	return []coned.Forecast{{Account: "account-demo0001", Start: "2026-07-01", End: "2026-08-01", Current: "2026-07-12", Unit: "KWH", UsageToDate: 150, CostToDate: 45, ForecastUsage: 410, ForecastCost: 125, TypicalUsage: 390, TypicalCost: 118}}, nil
+	return []coned.Forecast{{Account: "account-demo0001", Start: "2026-07-01", End: "2026-08-01", Current: "2026-07-12", Unit: "KWH", UsageToDate: 150, CostToDate: 45, ForecastUsage: 410, ForecastCost: 125, TypicalUsage: 390, TypicalCost: 118, AvailabilityKnown: true, UnitPresent: true, UsageToDatePresent: true, CostToDatePresent: true, ForecastUsagePresent: true, ForecastCostPresent: true, TypicalUsagePresent: true, TypicalCostPresent: true}}, nil
 }
 func (demoOpower) HistoricalReads(_ context.Context, _ auth.Session, o coned.ReadOptions) ([]coned.HistoricalRead, error) {
-	return []coned.HistoricalRead{{Account: "account-demo0001", Start: demoStart(o), End: demoEnd(o), Value: 1.25}}, nil
+	return []coned.HistoricalRead{{Account: "account-demo0001", Start: demoStart(o), End: demoEnd(o), Value: 1.25, AvailabilityKnown: true, ValuePresent: true}}, nil
 }
 func (demoOpower) HistoricalCosts(_ context.Context, _ auth.Session, o coned.ReadOptions) ([]coned.CostRead, error) {
-	return []coned.CostRead{{Account: "account-demo0001", Start: demoStart(o), End: demoEnd(o), Value: 1.25, Cost: .42}}, nil
+	return []coned.CostRead{{Account: "account-demo0001", Start: demoStart(o), End: demoEnd(o), Value: 1.25, Cost: .42, AvailabilityKnown: true, ValuePresent: true, CostPresent: true}}, nil
 }
 func demoStart(o coned.ReadOptions) string {
 	if o.From != "" {

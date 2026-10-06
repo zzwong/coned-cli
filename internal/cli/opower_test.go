@@ -19,6 +19,9 @@ type fakeOpower struct {
 	options   coned.ReadOptions
 	selection coned.EntitySelection
 	err       error
+	forecasts []coned.Forecast
+	reads     []coned.HistoricalRead
+	costs     []coned.CostRead
 }
 
 func (f *fakeOpower) Fetch(_ context.Context, _ auth.Session, resource string) (any, error) {
@@ -33,14 +36,23 @@ func (f *fakeOpower) FetchSelected(ctx context.Context, session auth.Session, re
 	return f.Fetch(ctx, session, resource)
 }
 func (f *fakeOpower) Forecast(context.Context, auth.Session) ([]coned.Forecast, error) {
+	if f.forecasts != nil {
+		return f.forecasts, f.err
+	}
 	return []coned.Forecast{{Account: "****1234", ForecastUsage: 10}}, f.err
 }
 func (f *fakeOpower) HistoricalReads(_ context.Context, _ auth.Session, options coned.ReadOptions) ([]coned.HistoricalRead, error) {
 	f.options = options
+	if f.reads != nil {
+		return f.reads, f.err
+	}
 	return []coned.HistoricalRead{{Account: "****1234", Start: "a", End: "b", Value: 2}}, f.err
 }
 func (f *fakeOpower) HistoricalCosts(_ context.Context, _ auth.Session, options coned.ReadOptions) ([]coned.CostRead, error) {
 	f.options = options
+	if f.costs != nil {
+		return f.costs, f.err
+	}
 	return []coned.CostRead{{Account: "****1234", Start: "a", End: "b", Value: 2, Cost: 1}}, f.err
 }
 func opowerDeps(t *testing.T, f *fakeOpower) Dependencies {

@@ -36,10 +36,32 @@ func newEntitiesCommand(options *Options, deps Dependencies) *cobra.Command {
 	list := &cobra.Command{Use: "list", Short: "List privacy-preserving entity handles", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runEntityList(cmd, options, deps, kind) }}
 	list.Flags().StringVar(&kind, "type", "", "filter: account, premise, meter, or register")
 	root.AddCommand(list)
-	root.AddCommand(&cobra.Command{Use: "alias <handle> <alias>", Short: "Assign a local alias", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		return saveEntityAlias(cmd, options, deps, args[0], args[1])
+	root.AddCommand(&cobra.Command{Use: "alias <handle> <alias>", Short: "Assign a local alias", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(2)(cmd, args); err != nil {
+			return err
+		}
+		if !identity.ValidAlias(args[1]) || !validEntityHandle(args[0]) {
+			return invalidArgument(coned.ErrProtocolChanged)
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		if err := saveEntityAlias(cmd, options, deps, args[0], args[1]); err != nil {
+			return err
+		}
+		if options.Envelope {
+			setEnvelopeData(deps, map[string]any{"status": "alias_updated"})
+		}
+		return nil
 	}})
-	root.AddCommand(&cobra.Command{Use: "select <handle-or-alias>", Short: "Set a profile default account or meter", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return selectEntity(cmd, options, deps, args[0]) }})
+	root.AddCommand(&cobra.Command{Use: "select <handle-or-alias>", Short: "Set a profile default account or meter", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			return err
+		}
+		if !validEntityHandle(args[0]) && !identity.ValidAlias(args[0]) {
+			return invalidArgument(coned.ErrProtocolChanged)
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error { return selectEntity(cmd, options, deps, args[0]) }})
 	return root
 }
 
@@ -119,10 +141,10 @@ func runEntityList(cmd *cobra.Command, options *Options, deps Dependencies, kind
 }
 func saveEntityAlias(cmd *cobra.Command, options *Options, deps Dependencies, handle, alias string) error {
 	if options.Demo {
-		return errors.New("demo aliases are not persisted")
+		return invalidArgument(errors.New("demo aliases are not persisted"))
 	}
 	if !identity.ValidAlias(alias) || !validEntityHandle(handle) {
-		return coned.ErrProtocolChanged
+		return invalidArgument(coned.ErrProtocolChanged)
 	}
 	entities, manager, err := entityContext(cmd, options, deps)
 	if err != nil {
@@ -152,19 +174,19 @@ func saveEntityAlias(cmd *cobra.Command, options *Options, deps Dependencies, ha
 	}
 	for existing, h := range selection.Aliases {
 		if existing == alias && h != handle {
-			return coned.ErrProtocolChanged
+			return outputConflictError()
 		}
 	}
 	selection.Aliases[alias] = handle
 	cfg.Selections[options.Profile] = selection
 	if cfg.Save(deps.ConfigPath) != nil {
-		return coned.ErrProtocolChanged
+		return outputFailedError()
 	}
 	return nil
 }
 func selectEntity(cmd *cobra.Command, options *Options, deps Dependencies, value string) error {
 	if options.Demo {
-		return errors.New("demo selections are not persisted")
+		return invalidArgument(errors.New("demo selections are not persisted"))
 	}
 	entities, manager, err := entityContext(cmd, options, deps)
 	if err != nil {
@@ -187,7 +209,7 @@ func selectEntity(cmd *cobra.Command, options *Options, deps Dependencies, value
 		}
 	}
 	if foundType != "account" && foundType != "meter" {
-		return coned.ErrProtocolChanged
+		return coned.ErrSelectionRequired
 	}
 	if cfg.Selections == nil {
 		cfg.Selections = map[string]config.Selection{}
@@ -199,7 +221,11 @@ func selectEntity(cmd *cobra.Command, options *Options, deps Dependencies, value
 	}
 	cfg.Selections[options.Profile] = selection
 	if cfg.Save(deps.ConfigPath) != nil {
-		return coned.ErrProtocolChanged
+		return outputFailedError()
+	}
+	if options.Envelope {
+		setEnvelopeData(deps, map[string]any{"status": "selection_updated"})
+		return nil
 	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), "selected "+strings.SplitN(value, "-", 2)[0])
 	return err

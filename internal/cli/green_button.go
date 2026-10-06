@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +36,15 @@ func newGreenButtonCommand(options *Options, deps Dependencies) *cobra.Command {
 			use = "download"
 			short = "Download the original Green Button ZIP"
 		}
-		cmd := &cobra.Command{Use: use, Short: short, RunE: func(c *cobra.Command, _ []string) error {
+		cmd := &cobra.Command{Use: use, Short: short, Args: func(c *cobra.Command, args []string) error {
+			if err := cobra.NoArgs(c, args); err != nil {
+				return err
+			}
+			if (download && format != "csv" && format != "xml") || (!download && format != "csv" && format != "xml" && format != "json") || !greenDate(from) || !greenDate(to) || (from == "") != (to == "") || (from != "" && from > to) {
+				return invalidArgument(coned.ErrProtocolChanged)
+			}
+			return nil
+		}, RunE: func(c *cobra.Command, _ []string) error {
 			return greenExport(c, options, deps, format, from, to, output, force, download)
 		}}
 		cmd.Flags().StringVar(&format, "format", "csv", "csv, json (export only), or xml")
@@ -83,7 +94,7 @@ func greenInspect(cmd *cobra.Command, o *Options, d Dependencies, jsonOutput boo
 func greenExport(cmd *cobra.Command, o *Options, d Dependencies, format, from, to, output string, force, download bool) error {
 	format = strings.ToLower(format)
 	if (download && (format != "csv" && format != "xml")) || (!download && format != "csv" && format != "xml" && format != "json") || !greenDate(from) || !greenDate(to) || (from == "") != (to == "") || (from != "" && from > to) {
-		return coned.ErrProtocolChanged
+		return invalidArgument(coned.ErrProtocolChanged)
 	}
 	s, e := billingSession(d, o.Profile)
 	if e != nil {
@@ -125,26 +136,44 @@ func greenExport(cmd *cobra.Command, o *Options, d Dependencies, format, from, t
 		}()
 		in, e := os.Open(spool)
 		if e != nil {
-			return coned.ErrProtocolChanged
+			return outputFailedError()
 		}
-		_, e = io.Copy(f, in)
+		hasher := sha256.New()
+		count, e := io.Copy(io.MultiWriter(f, hasher), in)
 		closeErr := in.Close()
-		if e != nil || closeErr != nil || f.Sync() != nil || f.Close() != nil {
-			return coned.ErrProtocolChanged
+		syncErr := f.Sync()
+		fileCloseErr := f.Close()
+		if e != nil || closeErr != nil || syncErr != nil || fileCloseErr != nil {
+			return outputFailedError()
 		}
-		if publishOutput(tmp, output, force) != nil {
-			return coned.ErrProtocolChanged
+		if publishErr := publishOutput(tmp, output, force); publishErr != nil {
+			return publishErr
 		}
 		keep = true
+		if o.Envelope {
+			setEnvelopeData(d, envelopeFile{Path: output, Bytes: count, SHA256: hex.EncodeToString(hasher.Sum(nil)), Format: format})
+			return nil
+		}
 		_, e = fmt.Fprintln(cmd.OutOrStdout(), output)
 		return e
 	}
-	if format == "json" {
-		e = coned.GreenButtonCSVJSON(spool, cmd.OutOrStdout())
-	} else {
-		e = coned.ExtractGreenButton(spool, format, cmd.OutOrStdout())
+	var content bytes.Buffer
+	destination := cmd.OutOrStdout()
+	if o.Envelope {
+		destination = &content
 	}
-	return safeGreenError(e)
+	if format == "json" {
+		e = coned.GreenButtonCSVJSON(spool, destination)
+	} else {
+		e = coned.ExtractGreenButton(spool, format, destination)
+	}
+	if e != nil {
+		return safeGreenError(e)
+	}
+	if o.Envelope {
+		setEnvelopeData(d, map[string]any{"format": format, "content": content.String()})
+	}
+	return nil
 }
 func greenDate(s string) bool {
 	if s == "" {
@@ -165,5 +194,5 @@ func safeGreenError(e error) error {
 			return x
 		}
 	}
-	return coned.ErrProtocolChanged
+	return internalBoundary(coned.ErrProtocolChanged)
 }

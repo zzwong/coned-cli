@@ -19,9 +19,17 @@ type schemaService interface {
 func newDiagnosticsCommand(options *Options, deps Dependencies) *cobra.Command {
 	root := &cobra.Command{Use: "diagnostics", Short: "Create value-free provider diagnostics", Args: cobra.NoArgs}
 	var output string
-	schema := &cobra.Command{Use: "schema", Short: "Record provider JSON structure without values", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if output == "" && !options.JSON {
-			return errors.New("--output is required unless --json is set")
+	schema := &cobra.Command{Use: "schema", Short: "Record provider JSON structure without values", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		if output == "" && !options.JSON && !options.Envelope {
+			return invalidArgument(errors.New("--output is required unless --json is set"))
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, _ []string) error {
+		if output == "" && !options.JSON && !options.Envelope {
+			return invalidArgument(errors.New("--output is required unless --json is set"))
 		}
 		var fingerprints []diagnostics.Fingerprint
 		if options.Demo {
@@ -59,10 +67,8 @@ func newDiagnosticsCommand(options *Options, deps Dependencies) *cobra.Command {
 		}
 		file, temp, err := newOutputFileWithPrefix(output, false, ".coned-diagnostics-*")
 		if err != nil {
-			return coned.ErrProtocolChanged
+			return err
 		}
-		name := file.Name()
-		_ = name
 		if _, err = file.Write(data); err == nil {
 			err = file.Sync()
 		}
@@ -71,11 +77,14 @@ func newDiagnosticsCommand(options *Options, deps Dependencies) *cobra.Command {
 		}
 		if err != nil {
 			_ = os.Remove(temp)
-			return coned.ErrProtocolChanged
+			return outputFailedError()
 		}
 		if err = publishOutput(temp, output, false); err != nil {
 			_ = os.Remove(temp)
-			return coned.ErrProtocolChanged
+			return err
+		}
+		if options.Envelope {
+			setEnvelopeData(deps, envelopeFile{Path: output, Bytes: int64(len(data)), SHA256: sha256Hex(data), Format: "json"})
 		}
 		return nil
 	}}

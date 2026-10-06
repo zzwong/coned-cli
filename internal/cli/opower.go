@@ -59,7 +59,16 @@ func newOpowerCommands(options *Options, deps Dependencies) []*cobra.Command {
 	}
 	var format, output string
 	var force bool
-	export := &cobra.Command{Use: "export", Short: "Export usage data", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	export := &cobra.Command{Use: "export", Short: "Export usage data", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		format = strings.ToLower(format)
+		if format != "csv" && format != "json" {
+			return invalidArgument(coned.ErrProtocolChanged)
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, _ []string) error {
 		return runOpowerExport(cmd, options, deps, format, output, force)
 	}}
 	export.Flags().StringVar(&format, "format", "json", "export format (csv or json)")
@@ -100,6 +109,10 @@ func usageForecastCommand(options *Options, deps Dependencies) *cobra.Command {
 			return safeOpowerError(err)
 		}
 		if options.JSON {
+			if options.Envelope {
+				setEnvelopeData(deps, forecastEnvelopeData(value))
+				return nil
+			}
 			return writeJSON(cmd.OutOrStdout(), value)
 		}
 		return writeTable(cmd.OutOrStdout(), value)
@@ -112,7 +125,13 @@ func usageHistoryCommand(name string, costs bool, options *Options, deps Depende
 	if costs {
 		short += " and costs"
 	}
-	command := &cobra.Command{Use: name, Short: short, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: name, Short: short, Args: func(_ *cobra.Command, _ []string) error {
+		aggregate = strings.ToLower(strings.TrimSpace(aggregate))
+		if !validReadFlags(aggregate, from, to) {
+			return invalidArgument(coned.ErrProtocolChanged)
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, _ []string) error {
 		if !options.Demo && (options.Account != "" || options.Meter != "") {
 			return coned.ErrSelectionRequired
 		}
@@ -149,6 +168,14 @@ func usageHistoryCommand(name string, costs bool, options *Options, deps Depende
 			return safeOpowerError(err)
 		}
 		if options.JSON {
+			if options.Envelope {
+				if costs {
+					setEnvelopeData(deps, costEnvelopeData(value.([]coned.CostRead)))
+				} else {
+					setEnvelopeData(deps, historicalReadEnvelopeData(value.([]coned.HistoricalRead)))
+				}
+				return nil
+			}
 			return writeJSON(cmd.OutOrStdout(), value)
 		}
 		return writeTable(cmd.OutOrStdout(), value)
@@ -224,7 +251,7 @@ func fetchOpower(cmd *cobra.Command, options *Options, deps Dependencies, resour
 func runOpowerExport(cmd *cobra.Command, options *Options, deps Dependencies, format, output string, force bool) error {
 	format = strings.ToLower(format)
 	if format != "csv" && format != "json" {
-		return coned.ErrProtocolChanged
+		return invalidArgument(coned.ErrProtocolChanged)
 	}
 	value, err := fetchOpower(cmd, options, deps, "export")
 	if err != nil {
@@ -245,12 +272,16 @@ func runOpowerExport(cmd *cobra.Command, options *Options, deps Dependencies, fo
 		return coned.ErrProtocolChanged
 	}
 	if output == "" {
+		if options.Envelope {
+			setEnvelopeData(deps, map[string]any{"format": format, "content": string(data)})
+			return nil
+		}
 		_, err = cmd.OutOrStdout().Write(data)
 		return err
 	}
 	file, temp, err := newOutputFileWithPrefix(output, force, ".coned-opower-*")
 	if err != nil {
-		return coned.ErrProtocolChanged
+		return err
 	}
 	keep := false
 	defer func() {
@@ -259,13 +290,22 @@ func runOpowerExport(cmd *cobra.Command, options *Options, deps Dependencies, fo
 			_ = os.Remove(temp)
 		}
 	}()
-	if _, err = file.Write(data); err != nil || file.Sync() != nil || file.Close() != nil {
-		return coned.ErrProtocolChanged
+	if _, err = file.Write(data); err != nil {
+		return outputFailedError()
+	}
+	if file.Sync() != nil {
+		return outputFailedError()
+	}
+	if file.Close() != nil {
+		return outputFailedError()
 	}
 	if err = publishOutput(temp, output, force); err != nil {
-		return coned.ErrProtocolChanged
+		return err
 	}
 	keep = true
+	if options.Envelope {
+		setEnvelopeData(deps, envelopeFile{Path: output, Bytes: int64(len(data)), SHA256: sha256Hex(data), Format: format})
+	}
 	return nil
 }
 
@@ -392,6 +432,9 @@ func flattenRecord(row map[string]any) map[string]any {
 }
 
 func safeOpowerError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if transport, ok := coned.AsSafeTransportError(err); ok {
 		return transport
 	}
@@ -403,7 +446,7 @@ func safeOpowerError(err error) error {
 	if protocol, ok := coned.AsSafeProtocolError(err); ok {
 		return &coned.ProtocolError{Status: protocol.Status}
 	}
-	return coned.ErrProtocolChanged
+	return internalBoundary(coned.ErrProtocolChanged)
 }
 
 // newOutputFileWithPrefix mirrors the bills atomic writer without changing the
@@ -412,19 +455,19 @@ func newOutputFileWithPrefix(output string, force bool, prefix string) (*os.File
 	info, err := os.Lstat(output)
 	if err == nil {
 		if info.IsDir() || !info.Mode().IsRegular() || !force {
-			return nil, "", coned.ErrProtocolChanged
+			return nil, "", outputConflictError()
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", coned.ErrProtocolChanged
+		return nil, "", outputFailedError()
 	}
 	file, err := os.CreateTemp(filepath.Dir(output), prefix)
 	if err != nil {
-		return nil, "", err
+		return nil, "", outputFailedError()
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
-		return nil, "", err
+		return nil, "", outputFailedError()
 	}
 	return file, file.Name(), nil
 }
