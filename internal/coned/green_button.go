@@ -225,7 +225,7 @@ func (c *Client) GreenButtonExport(ctx context.Context, s auth.Session, o GreenB
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", transportError(ctx)
+		return "", c.transportFailure(ctx, stepUsageExport, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -240,10 +240,14 @@ func (c *Client) GreenButtonExport(ctx context.Context, s auth.Session, o GreenB
 		_ = os.Remove(file.Name())
 		return "", ErrProtocolChanged
 	}
-	n, err := io.Copy(file, io.LimitReader(resp.Body, maxExportZIP+1))
+	trackedBody := &transportReadTracker{reader: io.LimitReader(resp.Body, maxExportZIP+1)}
+	n, err := io.Copy(file, trackedBody)
 	if err != nil || n > maxExportZIP {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
+		if trackedBody.err != nil {
+			return "", c.transportFailure(ctx, stepUsageExport, trackedBody.err)
+		}
 		return "", ErrProtocolChanged
 	}
 	if err = file.Close(); err != nil {

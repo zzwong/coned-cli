@@ -303,12 +303,12 @@ func (c *Client) opowerGET(ctx context.Context, session auth.Session, token, end
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return transportError(ctx)
+		return c.transportFailure(ctx, stepUsage, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return ErrProtocolChanged
+		return c.transportFailure(ctx, stepUsage, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return protocolError(resp)

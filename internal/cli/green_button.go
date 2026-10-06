@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -156,8 +157,11 @@ func safeGreenError(e error) error {
 	if e == nil {
 		return nil
 	}
+	if transport, ok := coned.AsSafeTransportError(e); ok {
+		return transport
+	}
 	for _, x := range []error{coned.ErrSessionExpired, coned.ErrProtocolChanged, coned.ErrGreenButtonUnavailable, coned.ErrOpowerUnavailable, context.Canceled, context.DeadlineExceeded} {
-		if strings.Contains(e.Error(), x.Error()) {
+		if errors.Is(e, x) {
 			return x
 		}
 	}

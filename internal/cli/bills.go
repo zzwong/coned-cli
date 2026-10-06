@@ -186,6 +186,9 @@ func safeBillError(err error) error {
 	if errors.As(err, &downloadErr) {
 		return downloadErr
 	}
+	if transport, ok := coned.AsSafeTransportError(err); ok {
+		return transport
+	}
 	if protocol, ok := coned.AsSafeProtocolError(err); ok {
 		// Bill-facing errors retain only the safe HTTP status, never a
 		// request ID intended for authentication diagnostics.

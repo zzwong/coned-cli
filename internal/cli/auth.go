@@ -296,10 +296,13 @@ func absentForLogin(err error, force bool) bool {
 }
 
 func safeAuthenticationError(err error) error {
+	if transport, ok := coned.AsSafeTransportError(err); ok {
+		return transport
+	}
 	if protocol, ok := coned.AsSafeProtocolError(err); ok {
 		return protocol
 	}
-	for _, safe := range []error{auth.ErrInvalidCredentials, auth.ErrInvalidSession, auth.ErrAuthenticationFailed, auth.ErrNotImplemented, auth.ErrPasswordInputNotTerminal, auth.ErrInvalidPasswordStdin, auth.ErrPasswordReadFailed, coned.ErrInvalidCredentials, coned.ErrMFARequired, coned.ErrChallengeRequired, coned.ErrSessionExpired, coned.ErrProtocolChanged} {
+	for _, safe := range []error{auth.ErrInvalidCredentials, auth.ErrInvalidSession, auth.ErrAuthenticationFailed, auth.ErrNotImplemented, auth.ErrPasswordInputNotTerminal, auth.ErrInvalidPasswordStdin, auth.ErrPasswordReadFailed, coned.ErrInvalidCredentials, coned.ErrMFARequired, coned.ErrChallengeRequired, coned.ErrSessionExpired, coned.ErrProtocolChanged, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, safe) {
 			return safe
 		}

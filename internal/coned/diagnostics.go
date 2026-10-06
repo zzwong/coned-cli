@@ -29,7 +29,7 @@ func (c *Client) SchemaDiagnostics(ctx context.Context, session auth.Session) ([
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, transportError(ctx)
+		return nil, c.transportFailure(ctx, stepDiagnostics, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -37,7 +37,7 @@ func (c *Client) SchemaDiagnostics(ctx context.Context, session auth.Session) ([
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, ErrProtocolChanged
+		return nil, c.transportFailure(ctx, stepDiagnostics, err)
 	}
 	fingerprint, err := diagnostics.Collect("opower-customers", "coned-live-verified", body, time.Now())
 	if err != nil {
