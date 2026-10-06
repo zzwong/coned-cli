@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +34,15 @@ func newBillsCommand(options *Options, deps Dependencies) *cobra.Command {
 	}})
 	var output string
 	var force bool
-	download := &cobra.Command{Use: "download <bill-id>", Short: "Download a bill PDF", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	download := &cobra.Command{Use: "download <bill-id>", Short: "Download a bill PDF", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			return err
+		}
+		if _, ok := billDateFromID(args[0]); !ok {
+			return invalidArgument(coned.ErrProtocolChanged)
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
 		return downloadBill(cmd, options, deps, args[0], output, force)
 	}}
 	download.Flags().StringVarP(&output, "output", "o", "", "PDF output path")
@@ -104,7 +114,7 @@ func downloadBill(cmd *cobra.Command, options *Options, deps Dependencies, id, o
 	}
 	date, ok := billDateFromID(id)
 	if !ok {
-		return coned.ErrProtocolChanged
+		return invalidArgument(coned.ErrProtocolChanged)
 	}
 	if output == "" {
 		output = "coned-bill-" + date + ".pdf"
@@ -121,23 +131,47 @@ func downloadBill(cmd *cobra.Command, options *Options, deps Dependencies, id, o
 		}
 	}()
 	ctx, cancel := context.WithTimeout(cmd.Context(), options.Timeout)
-	err = deps.Bills.DownloadBill(ctx, session, id, file)
+	hasher := sha256.New()
+	recorder := &outputRecorder{writer: io.MultiWriter(file, hasher)}
+	var destination io.Writer = file
+	if deps.Envelope {
+		destination = recorder
+	}
+	err = deps.Bills.DownloadBill(ctx, session, id, destination)
 	cancel()
 	if err != nil {
 		return safeBillError(err)
 	}
 	if err := file.Sync(); err != nil {
-		return coned.ErrProtocolChanged
+		return outputFailedError()
 	}
 	if err := file.Close(); err != nil {
-		return coned.ErrProtocolChanged
+		return outputFailedError()
 	}
 	if err := publishOutput(temp, output, force); err != nil {
-		return coned.ErrProtocolChanged
+		return err
 	}
 	keep = true
+	if deps.Envelope {
+		setEnvelopeData(deps, map[string]any{
+			"bill_id": id, "path": output, "bytes": recorder.bytes,
+			"sha256": hex.EncodeToString(hasher.Sum(nil)),
+		})
+		return nil
+	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), output)
 	return err
+}
+
+type outputRecorder struct {
+	writer io.Writer
+	bytes  int64
+}
+
+func (w *outputRecorder) Write(data []byte) (int, error) {
+	n, err := w.writer.Write(data)
+	w.bytes += int64(n)
+	return n, err
 }
 
 func billDateFromID(id string) (string, bool) {
@@ -149,32 +183,41 @@ func billDateFromID(id string) (string, bool) {
 // creates the destination after its initial preflight check.
 func publishOutput(temp, output string, force bool) error {
 	if force {
-		return os.Rename(temp, output)
+		if err := os.Rename(temp, output); err != nil {
+			return outputFailedError()
+		}
+		return nil
 	}
 	if err := os.Link(temp, output); err != nil {
-		return err
+		if errors.Is(err, os.ErrExist) {
+			return outputConflictError()
+		}
+		return outputFailedError()
 	}
-	return os.Remove(temp)
+	if err := os.Remove(temp); err != nil {
+		return outputFailedError()
+	}
+	return nil
 }
 
 func newOutputFile(output string, force bool) (*os.File, string, error) {
 	info, err := os.Lstat(output)
 	if err == nil {
 		if info.IsDir() || !info.Mode().IsRegular() || !force {
-			return nil, "", coned.ErrProtocolChanged
+			return nil, "", outputConflictError()
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", coned.ErrProtocolChanged
+		return nil, "", outputFailedError()
 	}
 	directory := filepath.Dir(output)
 	file, err := os.CreateTemp(directory, ".coned-bill-*")
 	if err != nil {
-		return nil, "", coned.ErrProtocolChanged
+		return nil, "", outputFailedError()
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
-		return nil, "", coned.ErrProtocolChanged
+		return nil, "", outputFailedError()
 	}
 	return file, file.Name(), nil
 }
@@ -199,5 +242,5 @@ func safeBillError(err error) error {
 			return safe
 		}
 	}
-	return coned.ErrProtocolChanged
+	return internalBoundary(coned.ErrProtocolChanged)
 }

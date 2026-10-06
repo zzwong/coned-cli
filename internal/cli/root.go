@@ -19,15 +19,17 @@ import (
 
 // Options contains values shared by all commands.
 type Options struct {
-	Profile string
-	JSON    bool
-	Timeout time.Duration
-	Demo    bool
-	Account string
-	Meter   string
+	Profile  string
+	JSON     bool
+	Envelope bool
+	Timeout  time.Duration
+	Demo     bool
+	Account  string
+	Meter    string
 }
 
-// Dependencies are the injectable services used by auth commands.
+// Dependencies configure the command services and the profile/configuration
+// sources used by production and tests.
 type Dependencies struct {
 	Store            securestore.Store
 	Authenticator    auth.Authenticator
@@ -40,7 +42,10 @@ type Dependencies struct {
 	DemoDiscovery    provider.Discovery
 	// ConfigPath optionally selects a non-secret configuration file. The
 	// production constructor supplies config.DefaultPath().
-	ConfigPath string
+	ConfigPath      string
+	Envelope        bool
+	ExplainEnvelope bool
+	envelope        *envelopeCapture
 }
 
 // NewRootCommand creates the root command with injectable terminal streams.
@@ -107,9 +112,15 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		deps.PasswordTerminal = auth.SystemPasswordTerminal{}
 	}
 
-	options := Options{Profile: settings.Profile, Timeout: settings.RequestTimeout}
+	options := Options{Profile: settings.Profile, JSON: deps.Envelope, Envelope: deps.Envelope, Timeout: settings.RequestTimeout}
 	cmd := &cobra.Command{Use: "coned", Short: "Con Edison account command-line client", Args: cobra.NoArgs}
+	if deps.Envelope || deps.ExplainEnvelope {
+		cmd.Long = "Con Edison account command-line client. Add --json-envelope to request the versioned v1 JSON or authentication NDJSON contract."
+	}
 	cmd.PersistentPreRunE = func(run *cobra.Command, _ []string) error {
+		if options.Envelope {
+			options.JSON = true
+		}
 		if configErr != nil {
 			return configErr
 		}
@@ -139,5 +150,62 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		cmd.AddCommand(opowerCommand)
 	}
 	cmd.AddCommand(newVersionCommand(&options.JSON))
+	cmd.AddCommand(newCapabilitiesCommand())
+	if deps.Envelope {
+		installDefaultHelpAndCompletion(cmd)
+		markArgumentValidation(cmd)
+		cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return invalidArgument(err) })
+	}
 	return cmd
+}
+
+func installDefaultHelpAndCompletion(root *cobra.Command) {
+	root.InitDefaultHelpFlag()
+	root.InitDefaultHelpCmd()
+	for _, child := range root.Commands() {
+		if child.Name() == "help" {
+			root.RemoveCommand(child)
+			break
+		}
+	}
+	root.AddCommand(&cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return nil
+			}
+			target, remaining, err := root.Find(args)
+			if err != nil || target == root || len(remaining) != 0 {
+				return invalidArgument(coned.ErrProtocolChanged)
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return root.Help()
+			}
+			target, _, err := root.Find(args)
+			if err != nil || target == root {
+				return invalidArgument(coned.ErrProtocolChanged)
+			}
+			return target.Help()
+		},
+	})
+	root.InitDefaultCompletionCmd()
+}
+
+func markArgumentValidation(command *cobra.Command) {
+	if command.Args != nil {
+		validate := command.Args
+		command.Args = func(cmd *cobra.Command, args []string) error {
+			if err := validate(cmd, args); err != nil {
+				return invalidArgument(err)
+			}
+			return nil
+		}
+	}
+	for _, child := range command.Commands() {
+		markArgumentValidation(child)
+	}
 }

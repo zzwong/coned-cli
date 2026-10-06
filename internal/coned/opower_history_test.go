@@ -37,6 +37,111 @@ func TestForecastParsesAndMasksAccount(t *testing.T) {
 	}
 }
 
+func TestForecastTracksAbsentAndExplicitZeroValues(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		estimate  string
+		charges   string
+		wantValue bool
+		wantCost  bool
+	}{
+		{name: "absent", estimate: `{"unit":"kWh"}`, charges: `{}`, wantValue: false, wantCost: false},
+		{name: "explicit zero", estimate: `{"value":0,"unit":"kWh"}`, charges: `{"value":0}`, wantValue: true, wantCost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"data":{"billingAccountsConnection":{"edges":[{"node":{"billForecast":{"timeInterval":"2026-07-01/2026-08-01","currentDateTime":"2026-07-12","segments":[{"serviceAgreement":{"uuid":"synthetic-account-1234"},"estimatedUsage":` + tc.estimate + `,"estimatedUsageCharges":` + tc.charges + `,"soFarUsage":{},"soFarUsageCharges":{},"priorYearUsage":{},"priorYearUsageCharges":{}}]}}}]}}}`
+			client, err := NewClient(Options{Transport: opowerRT(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host == "www.coned.com" {
+					return opowerResponse(`"fresh-token"`), nil
+				}
+				return opowerResponse(body), nil
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := client.Forecast(context.Background(), opowerSession(false))
+			if err != nil || len(got) != 1 {
+				t.Fatalf("forecasts=%#v err=%v", got, err)
+			}
+			if !got[0].AvailabilityKnown || got[0].ForecastUsagePresent != tc.wantValue || got[0].ForecastCostPresent != tc.wantCost {
+				t.Fatalf("presence=%#v", got[0])
+			}
+			if got[0].ForecastUsage != 0 || got[0].ForecastCost != 0 {
+				t.Fatalf("values=%#v, absent and zero both retain legacy numeric zero", got[0])
+			}
+			legacyJSON, err := json.Marshal(got[0])
+			if err != nil || !strings.Contains(string(legacyJSON), `"forecast_usage":0`) || strings.Contains(string(legacyJSON), "AvailabilityKnown") {
+				t.Fatalf("legacy JSON shape changed: %s, err=%v", legacyJSON, err)
+			}
+		})
+	}
+}
+
+func TestHistoricalReadsPreserveExplicitZeroAndSourceUnit(t *testing.T) {
+	client, err := NewClient(Options{Transport: opowerRT(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.URL.Host == "www.coned.com":
+			return opowerResponse(`"fresh-token"`), nil
+		case strings.Contains(r.URL.Path, "/customers"):
+			return opowerResponse(`{"customers":[{"uuid":"customer","utilityAccounts":[{"uuid":"account-1234"}]}]}`), nil
+		case strings.HasSuffix(r.URL.Path, "/reads"):
+			return opowerResponse(`{"reads":[{"startTime":"a","endTime":"b","value":0,"consumption":{"value":5,"unit":"kWh"}}]}`), nil
+		default:
+			t.Fatalf("unexpected request %s", r.URL)
+			return nil, nil
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads, err := client.HistoricalReads(context.Background(), opowerSession(false), ReadOptions{Aggregate: "day", From: "2026-01-01", To: "2026-01-01"})
+	if err != nil || len(reads) != 1 {
+		t.Fatalf("reads=%#v err=%v", reads, err)
+	}
+	if reads[0].Value != 0 || !reads[0].ValuePresent || reads[0].Unit != "kWh" || !reads[0].UnitPresent || !reads[0].AvailabilityKnown {
+		t.Fatalf("read lost value/unit provenance: %#v", reads[0])
+	}
+}
+
+func TestHistoricalCostsPreserveMissingAndExplicitZeroCost(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		providedCost string
+		wantPresent  bool
+	}{
+		{name: "missing", providedCost: "", wantPresent: false},
+		{name: "explicit zero", providedCost: `,"providedCost":0`, wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewClient(Options{Transport: opowerRT(func(r *http.Request) (*http.Response, error) {
+				switch {
+				case r.URL.Host == "www.coned.com":
+					return opowerResponse(`"fresh-token"`), nil
+				case strings.Contains(r.URL.Path, "/customers"):
+					return opowerResponse(`{"customers":[{"uuid":"customer","utilityAccounts":[{"uuid":"account-1234"}]}]}`), nil
+				case strings.Contains(r.URL.Path, "/cost/"):
+					return opowerResponse(`{"reads":[{"startTime":"a","endTime":"b","value":0` + tc.providedCost + `}]}`), nil
+				case strings.HasSuffix(r.URL.Path, "/reads"):
+					return opowerResponse(`{"reads":[{"startTime":"a","endTime":"b","value":9}]}`), nil
+				default:
+					t.Fatalf("unexpected request %s", r.URL)
+					return nil, nil
+				}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			costs, err := client.HistoricalCosts(context.Background(), opowerSession(false), ReadOptions{Aggregate: "day", From: "2026-01-01", To: "2026-01-01"})
+			if err != nil || len(costs) != 1 {
+				t.Fatalf("costs=%#v err=%v", costs, err)
+			}
+			if costs[0].Value != 0 || !costs[0].ValuePresent || costs[0].CostPresent != tc.wantPresent || costs[0].Cost != 0 {
+				t.Fatalf("cost provenance=%#v", costs[0])
+			}
+		})
+	}
+}
+
 func TestHistoricalReadsUseRESTAndBatchRanges(t *testing.T) {
 	var readRequests int
 	client, err := NewClient(Options{Transport: opowerRT(func(r *http.Request) (*http.Response, error) {

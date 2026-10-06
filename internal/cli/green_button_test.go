@@ -111,3 +111,30 @@ func TestGreenButtonValidationAndSafeErrors(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestGreenButtonUppercaseFormatsRemainCompatibleInBothModes(t *testing.T) {
+	_, deps := greenButtonDeps(t)
+	legacy, err := runWithDependencies(t, deps, "", "green-button export --format XML")
+	if err != nil || legacy != "<usage>synthetic</usage>" {
+		t.Fatalf("legacy uppercase export = %q err=%v", legacy, err)
+	}
+	legacyPath := filepath.Join(t.TempDir(), "legacy.zip")
+	legacy, err = runWithDependencies(t, deps, "", "green-button download --format CSV --output "+legacyPath)
+	if err != nil || strings.TrimSpace(legacy) != legacyPath {
+		t.Fatalf("legacy uppercase download = %q err=%v", legacy, err)
+	}
+
+	code, stdout, stderr := executeEnvelopeForTest(t, deps, "", "green-button", "export", "--format", "XML", "--json-envelope")
+	got := decodeEnvelopeForTest(t, stdout)
+	data := got["data"].(map[string]any)
+	if code != 0 || got["ok"] != true || data["format"] != "xml" || data["content"] != "<usage>synthetic</usage>" || stderr != "" {
+		t.Fatalf("envelope uppercase export: code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+	envelopePath := filepath.Join(t.TempDir(), "envelope.zip")
+	code, stdout, stderr = executeEnvelopeForTest(t, deps, "", "green-button", "download", "--format", "CSV", "--output", envelopePath, "--json-envelope")
+	got = decodeEnvelopeForTest(t, stdout)
+	data = got["data"].(map[string]any)
+	if code != 0 || got["ok"] != true || data["format"] != "csv" || data["path"] != envelopePath || stderr != "" {
+		t.Fatalf("envelope uppercase download: code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+}

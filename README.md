@@ -122,6 +122,82 @@ Use `--json` for structured output:
 coned --json usage summary
 ```
 
+### Versioned automation output
+
+Scripts that need a stable contract can opt in with `--json-envelope`. The flag
+may appear before or after a command and implies JSON output; without it,
+existing human output and `--json` response shapes are unchanged. A successful
+one-shot command emits exactly one v1 JSON object, and a failure emits one
+sanitized error object. For example:
+
+```bash
+coned bills list --json-envelope
+```
+
+```json
+{"schema_version":1,"command":"bills.list","ok":true,"captured_at":"2026-10-05T12:00:00+00:00","data":[{"id":"<opaque-public-id>"}]}
+```
+
+`captured_at` records when the CLI assembled the result in UTC. Provider
+timestamps and read interval `start`/`end` values keep their own meanings.
+Download results include the public bill handle, requested output path, byte
+count, and SHA-256 digest. CSV and XML exports are returned as strings inside
+`data` with a `format` field; file downloads return metadata rather than writing
+the path to standard output. Output conflicts leave the existing file intact.
+
+Authentication keeps its interactive timing and emits NDJSON events instead
+of buffering a one-shot result. Each event has `schema_version`, `command`, and
+`event`; terminal success includes `ok:true`, while terminal failure includes
+`ok:false` and the usual sanitized `error` object. The `mfa_required` event is
+written before the verification prompt is read. Prompts remain on standard
+error, and credentials, verification codes, cookies, challenge contents, and
+provider error text are never included.
+
+Consumers can inspect the supported command identifiers, schema versions, and
+error codes without opening a session or contacting Con Edison:
+
+```bash
+coned capabilities --json
+coned capabilities --json-envelope
+```
+
+In v1, command identifiers use dot-separated command paths such as
+`bills.list`, `usage.reads`, and `auth.login`. Optional `http_status` and
+allowlisted `transport_kind` fields give limited transport context. Usage rows
+keep provider values when present; fields whose provider presence is known to
+be absent are JSON `null`, and unknown units or currencies remain `null` rather
+than being inferred. Additive fields may be introduced within v1. A changed
+meaning or incompatible shape requires a newly advertised schema version.
+
+Failures use an allowlisted `error.code`; scripts should branch on this value,
+not on human text or exit-code subcategories. Exit status is 0 for success, 1
+for command failure, and 2 for invalid arguments or flags. `retryable:true`
+means only that a timeout or explicitly transient transport failure may be
+retried by the caller; it never authorizes an authentication or MFA retry.
+
+| Code | Meaning |
+| --- | --- |
+| `invalid_argument` | Invalid command argument or flag. |
+| `selection_required` | Select an eligible account or meter. |
+| `session_expired` | A usable authenticated session is unavailable. |
+| `mfa_required` | The provider requires multi-factor verification. |
+| `invalid_credentials` | Authentication credentials or verification were rejected. |
+| `storage_locked` | The operating-system credential store is locked. |
+| `storage_access_denied` | Credential-store access was denied. |
+| `storage_failed` | Credential storage failed. |
+| `transport_failed` | A non-timeout transport failure occurred. |
+| `timeout` | A request or command timed out. |
+| `canceled` | The request was canceled. |
+| `provider_protocol_changed` | A provider response no longer matches the expected protocol. |
+| `bill_not_found` | The requested public bill handle was not found. |
+| `output_conflict` | The destination exists or conflicts with a safe file write. |
+| `output_failed` | The output could not be written or published. |
+| `internal_error` | An unclassified failure occurred; private details are omitted. |
+
+Example migration: keep `coned --json bills list` if the current array shape is
+sufficient; switch to `coned bills list --json-envelope` when a caller needs a
+version marker and machine-readable failure codes.
+
 ### Historical reads and costs
 
 ```bash

@@ -27,7 +27,7 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 		}
 		var force, noStore, passwordStdin bool
 		command := &cobra.Command{Use: use, Short: "Authenticate with Con Edison", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			return authenticate(cmd, options.Profile, options.Timeout, deps, input, rawInput, force, noStore, passwordStdin, options.JSON)
+			return authenticate(cmd, options.Profile, options.Timeout, deps, input, rawInput, force, noStore, passwordStdin, options.JSON, options.Envelope)
 		}}
 		// Usage text on a failed login would land on stdout, which --json
 		// reserves for events.
@@ -58,6 +58,10 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 		if err := auth.SaveSession(deps.Store, options.Profile, session); err != nil {
 			return auth.StorageError(err)
 		}
+		if deps.Envelope {
+			setEnvelopeData(deps, map[string]any{"status": "authenticated_session_imported"})
+			return nil
+		}
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "authenticated session imported")
 		return err
 	}}
@@ -72,7 +76,7 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 	return authCmd
 }
 
-func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin, jsonOutput bool) error {
+func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, deps Dependencies, input *bufio.Reader, rawInput io.Reader, force, noStore, passwordStdin, jsonOutput, envelope bool) error {
 	storedSession, sessionErr := auth.LoadSession(deps.Store, profile)
 	if sessionErr == nil {
 		// A session the provider has ended is replaced as --force would, but
@@ -84,7 +88,7 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 				return err
 			}
 			if live {
-				return reportAuthenticated(cmd, jsonOutput)
+				return reportAuthenticated(cmd, jsonOutput, envelope)
 			}
 			replace = true
 		}
@@ -155,7 +159,7 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 		if _, outputErr := fmt.Fprintln(cmd.ErrOrStderr(), "Verification required. Con Edison may enforce a 3-minute resend cooldown."); outputErr != nil {
 			return outputErr
 		}
-		if err := loginEvent(cmd, jsonOutput, "mfa_required"); err != nil {
+		if err := loginEvent(cmd, jsonOutput, envelope, "mfa_required"); err != nil {
 			return err
 		}
 		for {
@@ -227,17 +231,25 @@ func authenticate(cmd *cobra.Command, profile string, timeout time.Duration, dep
 			}
 		}
 	}
-	return reportAuthenticated(cmd, jsonOutput)
+	return reportAuthenticated(cmd, jsonOutput, envelope)
 }
 
 // loginEvent writes one JSON line per login milestone in --json mode, so a
 // script can drive a login: mfa_required is written before the code is read
 // from standard input. Prompts go to stderr and never mix into this stream.
-func loginEvent(cmd *cobra.Command, jsonOutput bool, event string) error {
+func loginEvent(cmd *cobra.Command, jsonOutput, envelope bool, event string) error {
 	if !jsonOutput {
 		return nil
 	}
-	data, err := json.Marshal(map[string]string{"event": event})
+	var value any = map[string]string{"event": event}
+	if envelope {
+		value = authStreamEvent{SchemaVersion: envelopeSchemaVersion, Command: commandID(cmd), Event: event}
+		if event == "authenticated" {
+			ok := true
+			value = authStreamEvent{SchemaVersion: envelopeSchemaVersion, Command: commandID(cmd), Event: event, OK: &ok}
+		}
+	}
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -245,9 +257,9 @@ func loginEvent(cmd *cobra.Command, jsonOutput bool, event string) error {
 	return err
 }
 
-func reportAuthenticated(cmd *cobra.Command, jsonOutput bool) error {
+func reportAuthenticated(cmd *cobra.Command, jsonOutput, envelope bool) error {
 	if jsonOutput {
-		return loginEvent(cmd, jsonOutput, "authenticated")
+		return loginEvent(cmd, jsonOutput, envelope, "authenticated")
 	}
 	_, err := fmt.Fprintln(cmd.OutOrStdout(), "authenticated")
 	return err
@@ -296,18 +308,21 @@ func absentForLogin(err error, force bool) bool {
 }
 
 func safeAuthenticationError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if transport, ok := coned.AsSafeTransportError(err); ok {
 		return transport
 	}
 	if protocol, ok := coned.AsSafeProtocolError(err); ok {
 		return protocol
 	}
-	for _, safe := range []error{auth.ErrInvalidCredentials, auth.ErrInvalidSession, auth.ErrAuthenticationFailed, auth.ErrNotImplemented, auth.ErrPasswordInputNotTerminal, auth.ErrInvalidPasswordStdin, auth.ErrPasswordReadFailed, coned.ErrInvalidCredentials, coned.ErrMFARequired, coned.ErrChallengeRequired, coned.ErrSessionExpired, coned.ErrProtocolChanged, context.Canceled, context.DeadlineExceeded} {
+	for _, safe := range []error{auth.ErrInvalidCredentials, auth.ErrInvalidSession, auth.ErrAuthenticationFailed, auth.ErrNotImplemented, auth.ErrPromptFailed, auth.ErrPasswordInputNotTerminal, auth.ErrInvalidPasswordStdin, auth.ErrPasswordReadFailed, coned.ErrInvalidCredentials, coned.ErrMFARequired, coned.ErrChallengeRequired, coned.ErrSessionExpired, coned.ErrProtocolChanged, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, safe) {
 			return safe
 		}
 	}
-	return auth.ErrAuthenticationFailed
+	return internalBoundary(auth.ErrAuthenticationFailed)
 }
 
 // readPasswordStdin consumes exactly one newline-terminated line from input.
@@ -386,6 +401,10 @@ func authLogout(cmd *cobra.Command, profile string, timeout time.Duration, deps 
 	}
 	if len(errorsFound) > 0 {
 		return errors.Join(errorsFound...)
+	}
+	if deps.Envelope {
+		setEnvelopeData(deps, map[string]any{"status": "logged_out"})
+		return nil
 	}
 	_, err := fmt.Fprintln(cmd.OutOrStdout(), "not authenticated")
 	return err
