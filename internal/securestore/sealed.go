@@ -4,6 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -35,14 +37,24 @@ type keySource interface {
 
 const sealedFormatVersion = 1
 
+const maxSealedFilenameBytes = 255
+
 var errSealedStoreUnavailable = errors.New("sealed secret directory unavailable")
 
 func (d sealedDriver) path(service, account string) (string, error) {
 	if d.dir == "" {
 		return "", errSealedStoreUnavailable
 	}
-	// Accounts are base64url segments joined by "/", and base64url has no ".".
-	return filepath.Join(d.dir, service+"."+strings.ReplaceAll(account, "/", ".")), nil
+	// Preserve the historical name for normal accounts so existing sealed
+	// values remain readable. Account segments are base64url and contain no
+	// dots, so the fallback's single separator cannot collide with the normal
+	// two-segment filename. len reports bytes, matching filesystem limits.
+	name := service + "." + strings.ReplaceAll(account, "/", ".")
+	if len(name) > maxSealedFilenameBytes {
+		digest := sha256.Sum256([]byte(account))
+		name = service + ".sha256-" + hex.EncodeToString(digest[:])
+	}
+	return filepath.Join(d.dir, name), nil
 }
 
 func (d sealedDriver) Get(service, account string) ([]byte, error) {

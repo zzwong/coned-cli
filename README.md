@@ -328,7 +328,7 @@ make build
 ./bin/coned version
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull-request guidance. Provider fixtures must be synthetic and include version, provenance, and last-verified metadata.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and fixture guidance. Provider fixtures must be synthetic and include version, provenance, and last-verified metadata.
 
 ## Support and security
 
