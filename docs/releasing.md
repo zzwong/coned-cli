@@ -1,33 +1,42 @@
 # Releasing
 
-Releases are built by the tag-triggered GitHub Actions workflow. Linux archives are built with CGO disabled on an Ubuntu runner; Darwin amd64 and arm64 archives are built natively with CGO enabled on pinned Intel and arm64 macOS runners. Maintainers should not upload locally built archives to an existing release.
-
-## Preflight
-
-```bash
-git status --short
-go mod verify
-go test -race -shuffle=on ./...
-go vet ./...
-govulncheck ./...
-git diff --check
-goreleaser check --config .goreleaser.yml
-goreleaser check --config .goreleaser.darwin-amd64.yml
-goreleaser check --config .goreleaser.darwin-arm64.yml
-goreleaser release --snapshot --clean --config .goreleaser.yml
-goreleaser release --snapshot --clean --config .goreleaser.darwin-amd64.yml
-goreleaser release --snapshot --clean --config .goreleaser.darwin-arm64.yml
-```
-
-Run the Darwin amd64 snapshot on an Intel macOS host and the Darwin arm64 snapshot on an arm64 macOS host; a cross-compiled Darwin archive does not satisfy the release invariant. Snapshot configs intentionally do not generate checksums. Inspect each archive for the `coned` binary, `LICENSE`, `NOTICE`, `README.md`, and all third-party license texts. Confirm the binary contains the expected version, commit, commit timestamp, and `dirty=false` metadata.
+GitHub Actions builds and publishes releases from annotated version tags. Tag signing is optional; no signing-key setup is required to release.
 
 ## Publish
 
-1. Ensure `main` is green and the working tree is clean.
-2. Choose a semantic version. Before 1.0, incompatible CLI/schema changes increment the minor version.
-3. Create and verify a signed annotated tag: `git tag -s v0.1.0 -m 'v0.1.0' && git tag -v v0.1.0`.
-4. Push the tag: `git push origin v0.1.0`.
-5. Verify the single published release, its four exact archives, the one generated `checksums.txt`, and GitHub build-provenance attestations covering every archive and the checksum manifest before announcing the release.
-6. Test `gh attestation verify <archive> --repo zzwong/coned-cli` against one downloaded archive.
+1. Choose a semantic version. Before 1.0, incompatible CLI/schema changes increment the minor version.
+2. Start from a clean checkout of the intended `main` commit and confirm its CI passed:
 
-If a release is compromised or materially broken, remove the affected artifacts, publish a security advisory when appropriate, and issue a new version. Do not silently replace published artifacts under an existing tag.
+   ```bash
+   git switch main
+   git pull --ff-only
+   git status --short
+   git rev-parse HEAD
+   ```
+
+   Stop if the working tree is dirty. Check GitHub CI for that exact commit before tagging it.
+3. Create an annotated tag and push it (replace the example with the chosen version):
+
+   ```bash
+   version=v0.2.1
+   git -c tag.gpgSign=false tag -a "$version" -m "$version"
+   git rev-parse "$version^{commit}"
+   git push origin "$version"
+   ```
+
+   Confirm the tag resolves to the intended commit. Lightweight tags are rejected by the release workflow.
+4. Wait for the Release workflow to succeed. It runs tests, vet, vulnerability checks, and release-config validation; builds Linux amd64/arm64 and native macOS amd64/arm64 archives; checks archive contents and build metadata; then publishes four archives, `checksums.txt`, and build-provenance attestations.
+5. Download the archive for your machine and `checksums.txt` from the release. Verify the downloaded archive against its checksum and verify provenance:
+
+   ```bash
+   gh attestation verify <archive> --repo zzwong/coned-cli
+   gh attestation verify checksums.txt --repo zzwong/coned-cli
+   ```
+
+   Confirm verification reports the expected release workflow, tag, and source commit. Run the downloaded binary's `version` command and check its version, commit, and `dirty=false` before installing it or announcing the release.
+
+Routine releases do not require local snapshot builds or access to both Mac architectures. When changing release tooling, use `goreleaser check` and snapshot builds for the affected configs; verify Darwin snapshots on the matching native architecture.
+
+## Corrections
+
+Keep published tags and artifacts immutable. Fix a broken release with a new version instead of replacing its files. If artifacts are compromised, remove the affected downloads and publish a security advisory when appropriate.
