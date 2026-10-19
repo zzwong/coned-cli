@@ -149,11 +149,13 @@ func TestGreenButtonInspectFailureDiscardsPartialMetadata(t *testing.T) {
 		cmd := NewRootCommandWithDependencies(strings.NewReader(""), &stdout, &stderr, deps)
 		cmd.SetArgs(strings.Fields(command))
 		err := cmd.Execute()
-		if !errors.Is(err, coned.ErrProtocolChanged) || stdout.Len() != 0 || strings.Contains(err.Error(), "canary") {
+		if !errors.Is(err, coned.ErrProtocolChanged) || strings.Contains(err.Error(), "canary") {
 			t.Fatalf("stdout=%q err=%v", stdout.String(), err)
 		}
 		for _, canary := range []string{"canary", "RESIDENTIAL", "America/New_York", "2026-01"} {
-			if strings.Contains(stderr.String(), canary) {
+			// Legacy Cobra may render usage on stdout; neither stream may
+			// contain the service's partial metadata or private error detail.
+			if strings.Contains(stdout.String()+stderr.String(), canary) {
 				t.Fatalf("partial metadata or provider detail leaked: %s", canary)
 			}
 		}
