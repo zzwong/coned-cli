@@ -89,12 +89,16 @@ func (c *Client) GreenButtonInspect(ctx context.Context, s auth.Session) (GreenB
 			out.BillIntervals = append(out.BillIntervals, x.Interval)
 		}
 	}
+	seenCursors := make(map[string]struct{})
 	for cursor := ""; ; {
+		if err := ctx.Err(); err != nil {
+			return GreenButtonMetadata{}, err
+		}
 		var a struct {
 			Billing struct {
 				Agreements struct {
-					Page struct {
-						HasNext bool   `json:"hasNextPage"`
+					Page *struct {
+						HasNext *bool  `json:"hasNextPage"`
 						End     string `json:"endCursor"`
 					} `json:"pageInfo"`
 					Edges []struct {
@@ -116,6 +120,22 @@ func (c *Client) GreenButtonInspect(ctx context.Context, s auth.Session) (GreenB
 		if err := c.opowerCall(ctx, s, "WUE_GetUsageExportAvailableAMIReadsTimeInterval", greenAMIQuery, vars, &a); err != nil {
 			return GreenButtonMetadata{}, err
 		}
+		if err := ctx.Err(); err != nil {
+			return GreenButtonMetadata{}, err
+		}
+		page := a.Billing.Agreements.Page
+		if page == nil || page.HasNext == nil {
+			return GreenButtonMetadata{}, ErrProtocolChanged
+		}
+		if *page.HasNext {
+			if page.End == "" {
+				return GreenButtonMetadata{}, ErrProtocolChanged
+			}
+			if _, seen := seenCursors[page.End]; seen {
+				return GreenButtonMetadata{}, ErrProtocolChanged
+			}
+			seenCursors[page.End] = struct{}{}
+		}
 		for _, e := range a.Billing.Agreements.Edges {
 			for _, p := range e.Node.Points {
 				for _, r := range p.Registers {
@@ -125,10 +145,10 @@ func (c *Client) GreenButtonInspect(ctx context.Context, s auth.Session) (GreenB
 				}
 			}
 		}
-		if !a.Billing.Agreements.Page.HasNext || a.Billing.Agreements.Page.End == "" {
+		if !*page.HasNext {
 			break
 		}
-		cursor = a.Billing.Agreements.Page.End
+		cursor = page.End
 	}
 	return out, nil
 }
