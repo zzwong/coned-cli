@@ -1,6 +1,6 @@
 # Development
 
-Go 1.26.8 or newer is required. Install the pinned lint runner once:
+Go 1.26.9 or newer is required. Install the pinned lint runner once:
 
 ```bash
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
