@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -136,5 +137,38 @@ func TestGreenButtonUppercaseFormatsRemainCompatibleInBothModes(t *testing.T) {
 	data = got["data"].(map[string]any)
 	if code != 0 || got["ok"] != true || data["format"] != "csv" || data["path"] != envelopePath || stderr != "" {
 		t.Fatalf("envelope uppercase download: code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+}
+
+func TestGreenButtonInspectFailureDiscardsPartialMetadata(t *testing.T) {
+	fake, deps := greenButtonDeps(t)
+	// The fake deliberately returns plausible partial data together with an error.
+	fake.err = fmt.Errorf("synthetic-cursor-canary: %w", coned.ErrProtocolChanged)
+	for _, command := range []string{"green-button inspect", "--json green-button inspect"} {
+		var stdout, stderr bytes.Buffer
+		cmd := NewRootCommandWithDependencies(strings.NewReader(""), &stdout, &stderr, deps)
+		cmd.SetArgs(strings.Fields(command))
+		err := cmd.Execute()
+		if !errors.Is(err, coned.ErrProtocolChanged) || strings.Contains(err.Error(), "canary") {
+			t.Fatalf("stdout=%q err=%v", stdout.String(), err)
+		}
+		for _, canary := range []string{"canary", "RESIDENTIAL", "America/New_York", "2026-01"} {
+			// Legacy Cobra may render usage on stdout; neither stream may
+			// contain the service's partial metadata or private error detail.
+			if strings.Contains(stdout.String()+stderr.String(), canary) {
+				t.Fatalf("partial metadata or provider detail leaked: %s", canary)
+			}
+		}
+	}
+	code, stdout, stderr := executeEnvelopeForTest(t, deps, "", "green-button", "inspect", "--json-envelope")
+	got := decodeEnvelopeForTest(t, stdout)
+	errorData, ok := got["error"].(map[string]any)
+	if code != 1 || got["ok"] != false || !ok || errorData["code"] != "provider_protocol_changed" || got["data"] != nil || stderr != "" {
+		t.Fatalf("code=%d envelope=%#v stderr=%q", code, got, stderr)
+	}
+	for _, canary := range []string{"canary", "RESIDENTIAL", "America/New_York", "2026-01"} {
+		if strings.Contains(stdout+stderr, canary) {
+			t.Fatalf("partial metadata or provider detail leaked: %s", canary)
+		}
 	}
 }
