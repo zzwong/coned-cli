@@ -30,7 +30,7 @@ var envelopeErrorCodes = []string{
 
 var envelopeCommandIDs = []string{
 	"accounts", "accounts.list", "auth", "auth.import-browser", "auth.init", "auth.login", "auth.logout", "auth.status",
-	"bills", "bills.download", "bills.list", "bills.sync", "capabilities", "completion", "completion.bash", "completion.fish",
+	"bills", "bills.download", "bills.list", "bills.sync", "bills.verify", "capabilities", "completion", "completion.bash", "completion.fish",
 	"completion.powershell", "completion.zsh", "coned", "diagnostics", "diagnostics.inspect", "diagnostics.schema",
 	"entities", "entities.alias", "entities.list", "entities.select", "green-button", "green-button.download", "green-button.export",
 	"green-button.inspect", "help", "usage", "usage.bills", "usage.costs", "usage.export", "usage.forecast",
@@ -41,9 +41,9 @@ func availableEnvelopeCommandIDs() []string {
 	if billSyncPlatformSupported() {
 		return append([]string(nil), envelopeCommandIDs...)
 	}
-	commands := make([]string, 0, len(envelopeCommandIDs)-1)
+	commands := make([]string, 0, len(envelopeCommandIDs)-2)
 	for _, command := range envelopeCommandIDs {
-		if command != "bills.sync" {
+		if command != "bills.sync" && command != "bills.verify" {
 			commands = append(commands, command)
 		}
 	}
@@ -160,7 +160,12 @@ func ExecuteCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, deps D
 		deps.ExplainEnvelope = true
 		cmd := NewRootCommandWithDependencies(stdin, stdout, stderr, deps)
 		cmd.SetArgs(cleanArgs)
+		selected, _, _ := cmd.Find(cleanArgs)
 		if err := cmd.Execute(); err != nil {
+			// Preserve legacy commands; verify has an explicit argument exit contract.
+			if commandID(selected) == "bills.verify" && mapEnvelopeError(err, false).arg {
+				return 2
+			}
 			return 1
 		}
 		return 0
@@ -481,6 +486,13 @@ func helpRequested(args []string) bool {
 }
 
 func mapEnvelopeError(err error, argument bool) mappedError {
+	var verification *billVerifyFailure
+	if errors.As(err, &verification) && verification != nil {
+		mapped := mapEnvelopeError(verification.cause, argument)
+		mapped.data = verification.report
+		mapped.hasData = true
+		return mapped
+	}
 	var partial *billSyncFailure
 	if errors.As(err, &partial) && partial != nil {
 		mapped := mapEnvelopeError(partial.cause, argument)

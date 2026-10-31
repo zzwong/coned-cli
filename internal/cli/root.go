@@ -127,8 +127,8 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		}
 		if options.Demo {
 			path := run.CommandPath()
-			if path != "coned bills sync" && !strings.Contains(path, " entities ") && !strings.Contains(path, " diagnostics ") && !strings.Contains(path, " usage ") && !strings.Contains(path, " accounts ") {
-				return fmt.Errorf("demo mode supports only bills sync, entities, diagnostics, accounts, and usage commands")
+			if path != "coned bills sync" && path != "coned bills verify" && !strings.Contains(path, " entities ") && !strings.Contains(path, " diagnostics ") && !strings.Contains(path, " usage ") && !strings.Contains(path, " accounts ") {
+				return fmt.Errorf("demo mode supports only bills sync/verify, entities, diagnostics, accounts, and usage commands")
 			}
 		}
 		return nil
