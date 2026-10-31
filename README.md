@@ -39,7 +39,7 @@ To build from a checkout:
 make install
 ```
 
-Go 1.26.9 or newer is required. Release binaries are available for Linux and macOS on amd64 and arm64.
+Go 1.26.10 or newer is required. Release binaries are available for Linux and macOS on amd64 and arm64.
 
 ## Try it without an account
 
@@ -62,6 +62,8 @@ coned auth status
 coned auth logout
 coned auth logout --forget
 ```
+
+`coned auth status` reads the stored session and applies local validity and expiry checks. `authenticated` does not mean Con Edison currently accepts the session: the provider can end a session before its stored cookies expire. The JSON `authentication_timestamp` is the recorded authentication time, not the time of an online verification. Status can access the configured credential storage; it is not a passive storage-health check. If a data command reports `session_expired`, run `coned auth login` to recover.
 
 Interactive password input is hidden. With persistence enabled, credentials and session cookies are stored in Linux Secret Service, or on macOS in files encrypted with a key held in the Keychain, which keeps access across upgrades ([details](docs/security.md#storage)). Credentials are saved only after confirmation, and there is no plaintext fallback.
 
@@ -129,6 +131,43 @@ session or contacting Con Edison:
 ```bash
 coned --demo --json-envelope bills sync --directory "$HOME/Bills"
 ```
+
+### Compare retained bill bytes
+
+`coned bills verify --directory PATH [--since YYYY-MM-DD]` compares retained
+PDFs with fresh provider copies without overwriting or creating bill, cache,
+manifest, or state files. The directory must already exist. Filenames match
+`bills sync`. Without a cutoff only the newest provider date is selected; with
+`--since`, dates strictly after the cutoff are selected oldest first. Missing
+local files are reported without downloading their PDFs.
+
+Each comparison downloads the full provider PDF (up to 100 MiB), so verifying
+many bills has a bandwidth cost. The retained file stays open and is checked
+again after the download. The remote stream is hashed and discarded, never
+saved. PDF validation checks the signature and size, not full PDF syntax.
+
+Use `--json-envelope` for the schema-v1 `bills.verify` result. Its data has
+`report_version: 1`, `since`, `directory`, `results`, counts (`unchanged`,
+`changed`, `missing_local`, `failed`, `not_attempted`), and `content_changed`.
+Results use `unchanged`, `content_changed`, `missing_local`, `failed`, or
+`not_attempted`. Only completed comparisons include `local_bytes`,
+`local_sha256`, `provider_bytes`, and `provider_sha256`. Different bytes are
+informational success (exit 0), not evidence of amended charges or a replacement
+bill. Review any difference manually. A run with missing local files may also
+succeed, so inspect counts rather than treating `content_changed: false` as proof
+that every bill was compared. Failures exit 1 and retain partial results;
+malformed command arguments exit 2. Systemic failures stop later requests.
+
+Date-derived bill identity is unchanged: ambiguous same-date documents and
+billing-scope drift fail closed. This command does not log in, request MFA,
+retry authentication, parse charges, update CSV/document maps, or offer `--force`.
+Results describe only the fresh bytes observed during that run, not permanent
+freshness. Ordinary filesystem read access times may change.
+
+For an entirely synthetic example with both unchanged and changed results,
+run `coned --demo bills verify --directory ignored --since 2026-01-01`.
+Demo does not inspect that directory, load a billing session, or contact the
+provider; its report uses `demo:memory` as the directory.
 
 ## Usage data
 

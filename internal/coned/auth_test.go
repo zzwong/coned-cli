@@ -27,7 +27,7 @@ func readFixture(t *testing.T, name string) string {
 
 func testClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
-	client, err := NewClient(Options{BaseURL: server.URL, InsecureLoopbackForTests: true})
+	client, err := NewClient(Options{BaseURL: server.URL, Transport: newAuthFixtureTransport(t, server), InsecureLoopbackForTests: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestAuthenticateSuccessAndExactPayload(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client, err := NewClient(Options{BaseURL: server.URL, Version: "test", InsecureLoopbackForTests: true})
+	client, err := NewClient(Options{BaseURL: server.URL, Version: "test", Transport: newAuthFixtureTransport(t, server), InsecureLoopbackForTests: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestTimeoutAndCookieFilteringAndRestore(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	client, err := NewClient(Options{BaseURL: server.URL, Timeout: 10 * time.Millisecond, InsecureLoopbackForTests: true})
+	client, err := NewClient(Options{BaseURL: server.URL, Timeout: 10 * time.Millisecond, Transport: newAuthFixtureTransport(t, server), InsecureLoopbackForTests: true})
 	if err != nil {
 		t.Fatal(err)
 	}

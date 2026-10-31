@@ -37,7 +37,7 @@ func newAuthCommand(options *Options, deps Dependencies, input *bufio.Reader, ra
 		command.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read one newline-terminated password from standard input")
 		authCmd.AddCommand(command)
 	}
-	authCmd.AddCommand(&cobra.Command{Use: "status", Short: "Show authentication status", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	authCmd.AddCommand(&cobra.Command{Use: "status", Short: "Show stored session status", Long: "Show stored session status using local validity and expiry checks.\n\nThis reads the stored session from the configured credential storage; it is not a passive storage-health check.\nIt does not verify whether Con Edison currently accepts the session.\nThe authentication timestamp records authentication, not an online verification.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return authStatus(cmd, options.Profile, options.JSON, deps)
 	}})
 	var browserEndpoint string
