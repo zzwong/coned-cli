@@ -49,6 +49,7 @@ func newBillsCommand(options *Options, deps Dependencies) *cobra.Command {
 	download.Flags().BoolVar(&force, "force", false, "replace an existing regular file")
 	bills.AddCommand(download)
 	bills.AddCommand(newBillSyncCommand(options, deps))
+	bills.AddCommand(newBillVerifyCommand(options, deps))
 	return bills
 }
 
