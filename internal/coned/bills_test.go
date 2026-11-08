@@ -281,6 +281,114 @@ func TestDownloadBillValidatesURLSizeAndPDF(t *testing.T) {
 	}
 }
 
+type billPDFResponseBody struct {
+	reader *strings.Reader
+	reads  int
+	closed bool
+}
+
+func (b *billPDFResponseBody) Read(p []byte) (int, error) {
+	b.reads++
+	return b.reader.Read(p)
+}
+
+func (b *billPDFResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestDownloadBillRejectsPartialResponsesBeforeWriting(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		method := "legacy"
+		if strict {
+			method = "strict"
+		}
+		for _, tc := range []struct {
+			name, contentRange, pdf string
+			status                  int
+			want                    error
+		}{
+			{"partial range", "bytes 0-4/100", "%PDF-", http.StatusPartialContent, ErrProtocolChanged},
+			{"partial without range", "", "%PDF-", http.StatusPartialContent, ErrProtocolChanged},
+			{"partial malformed range", "private-range", "%PDF-", http.StatusPartialContent, ErrProtocolChanged},
+			{"partial full range", "bytes 0-13/14", "%PDF-synthetic", http.StatusPartialContent, ErrProtocolChanged},
+			{"complete", "", "%PDF-synthetic", http.StatusOK, nil},
+			{"other success unchanged", "", "%PDF-synthetic", http.StatusNonAuthoritativeInfo, nil},
+			{"unauthorized", "", "%PDF-synthetic", http.StatusUnauthorized, ErrSessionExpired},
+			{"forbidden", "", "%PDF-synthetic", http.StatusForbidden, ErrSessionExpired},
+		} {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case billHistoryPath:
+						_, _ = io.WriteString(w, readFixture(t, "bill_history.html"))
+					case residentialBillHistoryPath:
+						_, _ = io.WriteString(w, `[{"BillDate":"2026-02-15","DocumentId":"opaque","DocumentType":"bill"}]`)
+					case billInsertImagePath:
+						_, _ = io.WriteString(w, `{"url":"https://synthetic.blob.core.windows.net/bill.pdf?sig=secret"}`)
+					default:
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				client := testClient(t, server)
+				body := &billPDFResponseBody{reader: strings.NewReader(tc.pdf)}
+				pdfCalls := 0
+				client.httpClient.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Hostname() != "synthetic.blob.core.windows.net" {
+						return http.DefaultTransport.RoundTrip(r)
+					}
+					pdfCalls++
+					if r.Header.Get("Range") != "" {
+						t.Error("full bill download unexpectedly sent Range")
+					}
+					header := make(http.Header)
+					if tc.contentRange != "" {
+						header.Set("Content-Range", tc.contentRange)
+					}
+					header.Set("Request-Id", "synthetic-request")
+					return &http.Response{StatusCode: tc.status, Header: header, Body: body, Request: r}, nil
+				})
+				session := billSession(t, server.URL)
+				var output bytes.Buffer
+				var err error
+				if strict {
+					if bills, listErr := client.ListBillsForSync(context.Background(), session); listErr != nil || len(bills) != 1 {
+						t.Fatalf("initial strict list=%#v err=%v", bills, listErr)
+					}
+					err = client.DownloadBillForSync(context.Background(), session, localBillID("2026-02-15"), &output)
+				} else {
+					err = client.DownloadBill(context.Background(), session, localBillID("2026-02-15"), &output)
+				}
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("download error=%v, want %v", err, tc.want)
+				}
+				if pdfCalls != 1 || !body.closed {
+					t.Fatalf("PDF requests=%d body closed=%v", pdfCalls, body.closed)
+				}
+				if tc.want == nil {
+					if output.String() != tc.pdf {
+						t.Fatalf("PDF output=%q, want %q", output.String(), tc.pdf)
+					}
+				} else if output.Len() != 0 || body.reads != 0 {
+					t.Fatalf("rejected response was consumed: output=%d reads=%d", output.Len(), body.reads)
+				}
+				if tc.status == http.StatusPartialContent {
+					var protocol *ProtocolError
+					if !errors.As(err, &protocol) || protocol.Status != http.StatusPartialContent || protocol.RequestID != "" {
+						t.Fatalf("partial response lost sanitized status: %v", err)
+					}
+				}
+				for _, private := range []string{"secret", "private-range", "synthetic-request", "blob.core.windows.net"} {
+					if strings.Contains(errString(err), private) {
+						t.Fatalf("download error exposed %q: %v", private, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestBillDownloadErrorPreservesSafeProtocolStatus(t *testing.T) {
 	id := localBillID("2026-02-15")
 	protocol := &ProtocolError{Status: http.StatusBadGateway, RequestID: "request-123"}

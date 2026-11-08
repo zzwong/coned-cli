@@ -184,7 +184,9 @@ func (c *Client) downloadBill(ctx context.Context, session auth.Session, id stri
 		return billDownloadError(id, err)
 	}
 	defer func() { _ = pdf.Body.Close() }()
-	if pdf.StatusCode < 200 || pdf.StatusCode >= 300 {
+	// This request does not send Range and cannot assemble partial responses.
+	// Refuse 206 before streaming any bytes as a complete bill document.
+	if pdf.StatusCode < 200 || pdf.StatusCode >= 300 || pdf.StatusCode == http.StatusPartialContent {
 		if pdf.StatusCode == http.StatusUnauthorized || pdf.StatusCode == http.StatusForbidden || isLoginRedirect(pdf) {
 			return billDownloadError(id, ErrSessionExpired)
 		}
