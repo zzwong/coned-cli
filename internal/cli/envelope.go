@@ -31,7 +31,7 @@ var envelopeErrorCodes = []string{
 var envelopeCommandIDs = []string{
 	"accounts", "accounts.list", "auth", "auth.import-browser", "auth.init", "auth.login", "auth.logout", "auth.status",
 	"bills", "bills.download", "bills.list", "bills.sync", "bills.verify", "capabilities", "completion", "completion.bash", "completion.fish",
-	"completion.powershell", "completion.zsh", "coned", "diagnostics", "diagnostics.inspect", "diagnostics.schema",
+	"completion.powershell", "completion.zsh", "coned", "diagnostics", "diagnostics.inspect", "diagnostics.schema", "doctor",
 	"entities", "entities.alias", "entities.list", "entities.select", "green-button", "green-button.download", "green-button.export",
 	"green-button.inspect", "help", "usage", "usage.bills", "usage.costs", "usage.export", "usage.forecast",
 	"usage.meters", "usage.neighbors", "usage.reads", "usage.realtime", "usage.summary", "usage.weather", "version",
@@ -163,7 +163,7 @@ func ExecuteCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, deps D
 		selected, _, _ := cmd.Find(cleanArgs)
 		if err := cmd.Execute(); err != nil {
 			// Preserve legacy commands; verify has an explicit argument exit contract.
-			if commandID(selected) == "bills.verify" && mapEnvelopeError(err, false).arg {
+			if (commandID(selected) == "bills.verify" || commandID(selected) == "doctor") && mapEnvelopeError(err, false).arg {
 				return 2
 			}
 			return 1
@@ -486,6 +486,13 @@ func helpRequested(args []string) bool {
 }
 
 func mapEnvelopeError(err error, argument bool) mappedError {
+	var diagnostic *doctorFailure
+	if errors.As(err, &diagnostic) && diagnostic != nil {
+		mapped := mapEnvelopeError(diagnostic.cause, argument)
+		mapped.data = diagnostic.report
+		mapped.hasData = true
+		return mapped
+	}
 	var verification *billVerifyFailure
 	if errors.As(err, &verification) && verification != nil {
 		mapped := mapEnvelopeError(verification.cause, argument)

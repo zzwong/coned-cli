@@ -34,3 +34,9 @@ Do not run live tests in CI or retain their output if it contains personal infor
 Never commit or attach raw HAR files, cookies, bearer tokens, signed URLs, account numbers, service addresses, bills, or unredacted provider responses. Prefer `coned diagnostics schema`, which records structure without scalar values.
 
 For security vulnerabilities, follow [SECURITY.md](SECURITY.md).
+
+The initial `doctor` command is a local report only. Its tests use forbidden
+credential and provider dependencies to catch accidental access. Full doctor
+qualification still requires bounded pre-command configuration loading, passive
+native backend readers, explicit online verification, safe destination metadata,
+and native Mac tests. Do not treat local report tests as those acceptance results.

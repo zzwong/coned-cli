@@ -384,3 +384,20 @@ This project is not affiliated with or endorsed by Consolidated Edison, Inc., Op
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 `zzwong`. Third-party license texts distributed with release archives are in [third_party_licenses/](third_party_licenses/).
+
+### Local diagnostics (initial tranche)
+
+`coned doctor` reports local configuration validity and the compiled platform without
+reading credential storage or contacting a provider. `--json` and `--json-envelope`
+retain a fixed-order report; a configuration failure retains the full report and
+returns exit 1. A passing local report has `ready: null`, not `true`.
+
+This initial command does **not** implement `--online` or `--directory`. Build
+provenance, credential backend health, provider readiness, account/meter discovery,
+and destination metadata remain explicitly `not_checked`. It does not prove that
+unattended commands can run. `--demo` is not yet supported: the existing CLI initialization must first be
+separated from non-secret configuration reads.
+
+The existing root configuration loader runs before command execution. Therefore,
+this tranche does not yet provide the planned whole-command deadline for a stalled
+configuration read. It is not completion of the broader passive doctor contract.

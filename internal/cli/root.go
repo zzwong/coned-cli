@@ -122,7 +122,7 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 		if options.Envelope {
 			options.JSON = true
 		}
-		if configErr != nil {
+		if configErr != nil && run.CommandPath() != "coned doctor" {
 			return configErr
 		}
 		if options.Demo {
@@ -150,6 +150,7 @@ func NewRootCommandWithDependencies(stdin io.Reader, stdout, stderr io.Writer, d
 	for _, opowerCommand := range newOpowerCommands(&options, deps) {
 		cmd.AddCommand(opowerCommand)
 	}
+	cmd.AddCommand(newDoctorCommand(&options, deps, configErr))
 	cmd.AddCommand(newVersionCommand(&options.JSON))
 	cmd.AddCommand(newCapabilitiesCommand())
 	if deps.Envelope {
